@@ -82,11 +82,14 @@ type
 
 //******************************************************************************
 
-  TRijLength  = (rl128bit,rl160bit,rl192bit,rl224bit,rl256bit);
+//  For decryption, an Equivalent Inverse Cipher is used.
 
-  TRijWord        = UInt32;
-  TRijKey         = array[0..31] of Byte;      {256 bits}
-  TRijKeySchedule = array[0..119] of TRijWord;
+  TRijLength  = (r128bit,r160bit,r192bit,r224bit,r256bit);
+
+  TRijWord = UInt32;
+  PRijWord = ^TRijWord;
+
+  TRijKeySchedule = array[0..119] of TRijWord; {$message '120? shouldn''t it be 72 [0..71]?'}
   TRijState       = array[0..7] of TRijWord;   {256 bits}
 
   TRijndaelCipher = class(TBlockCipher)
@@ -94,9 +97,8 @@ type
     fKeyLength:   TRijLength;
     fBlockLength: TRijLength;
     fNk:          Integer;    // length of the key in words
-    fNb:          Integer;    // length of the block in words
+    fNb:          Integer;    // length of the block in words (also number of columns in state)
     fNr:          Integer;    // number of rounds (function of Nk an Nb)
-    fRijKey:      TRijKey;
     fKeySchedule: TRijKeySchedule;
   protected
     procedure SetKeyLength(Value: TRijLength); virtual;
@@ -558,9 +560,311 @@ end;
 {==============================================================================}
 {    Rijndael cipher lookup tables                                             }
 {==============================================================================}
-// Equivalent Inverse Cipher
+{
+  Majority of calculations is replaced by following lookup tables.
+  Also note that current imlementation is optimized for little endian system,
+  but original Rijndael specification is for big endian. Any intermediate value
+  will have reversed endianees in comparison with test vectors.
+
+--- Original data --------------------------------------------------------------
+
+  Rijndael substitution table:
+
+       | 0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+    ---|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|
+    00 |63 7c 77 7b f2 6b 6f c5 30 01 67 2b fe d7 ab 76
+    10 |ca 82 c9 7d fa 59 47 f0 ad d4 a2 af 9c a4 72 c0
+    20 |b7 fd 93 26 36 3f f7 cc 34 a5 e5 f1 71 d8 31 15
+    30 |04 c7 23 c3 18 96 05 9a 07 12 80 e2 eb 27 b2 75
+    40 |09 83 2c 1a 1b 6e 5a a0 52 3b d6 b3 29 e3 2f 84
+    50 |53 d1 00 ed 20 fc b1 5b 6a cb be 39 4a 4c 58 cf
+    60 |d0 ef aa fb 43 4d 33 85 45 f9 02 7f 50 3c 9f a8
+    70 |51 a3 40 8f 92 9d 38 f5 bc b6 da 21 10 ff f3 d2
+    80 |cd 0c 13 ec 5f 97 44 17 c4 a7 7e 3d 64 5d 19 73
+    90 |60 81 4f dc 22 2a 90 88 46 ee b8 14 de 5e 0b db
+    a0 |e0 32 3a 0a 49 06 24 5c c2 d3 ac 62 91 95 e4 79
+    b0 |e7 c8 37 6d 8d d5 4e a9 6c 56 f4 ea 65 7a ae 08
+    c0 |ba 78 25 2e 1c a6 b4 c6 e8 dd 74 1f 4b bd 8b 8a
+    d0 |70 3e b5 66 48 03 f6 0e 61 35 57 b9 86 c1 1d 9e
+    e0 |e1 f8 98 11 69 d9 8e 94 9b 1e 87 e9 ce 55 28 df
+    f0 |8c a1 89 0d bf e6 42 68 41 99 2d 0f b0 54 bb 16
+
+  Rijndael inverse substitution table:
+
+       | 0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+    ---|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|
+    00 |52 09 6a d5 30 36 a5 38 bf 40 a3 9e 81 f3 d7 fb
+    10 |7c e3 39 82 9b 2f ff 87 34 8e 43 44 c4 de e9 cb
+    20 |54 7b 94 32 a6 c2 23 3d ee 4c 95 0b 42 fa c3 4e
+    30 |08 2e a1 66 28 d9 24 b2 76 5b a2 49 6d 8b d1 25
+    40 |72 f8 f6 64 86 68 98 16 d4 a4 5c cc 5d 65 b6 92
+    50 |6c 70 48 50 fd ed b9 da 5e 15 46 57 a7 8d 9d 84
+    60 |90 d8 ab 00 8c bc d3 0a f7 e4 58 05 b8 b3 45 06
+    70 |d0 2c 1e 8f ca 3f 0f 02 c1 af bd 03 01 13 8a 6b
+    80 |3a 91 11 41 4f 67 dc ea 97 f2 cf ce f0 b4 e6 73
+    90 |96 ac 74 22 e7 ad 35 85 e2 f9 37 e8 1c 75 df 6e
+    a0 |47 f1 1a 71 1d 29 c5 89 6f b7 62 0e aa 18 be 1b
+    b0 |fc 56 3e 4b c6 d2 79 20 9a db c0 fe 78 cd 5a f4
+    c0 |1f dd a8 33 88 07 c7 31 b1 12 10 59 27 80 ec 5f
+    d0 |60 51 7f a9 19 b5 4a 0d 2d e5 7a 9f 93 c9 9c ef
+    e0 |a0 e0 3b 4d ae 2a f5 b0 c8 eb bb 3c 83 53 99 61
+    f0 |17 2b 04 7e ba 77 d6 26 e1 69 14 63 55 21 0c 7d
+
+  Rijndael Galois Multiplication lookup tables:
+
+    (*2)
+       | 0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+    ---|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|
+    00 |00 02 04 06 08 0a 0c 0e 10 12 14 16 18 1a 1c 1e
+    10 |20 22 24 26 28 2a 2c 2e 30 32 34 36 38 3a 3c 3e
+    20 |40 42 44 46 48 4a 4c 4e 50 52 54 56 58 5a 5c 5e
+    30 |60 62 64 66 68 6a 6c 6e 70 72 74 76 78 7a 7c 7e
+    40 |80 82 84 86 88 8a 8c 8e 90 92 94 96 98 9a 9c 9e
+    50 |a0 a2 a4 a6 a8 aa ac ae b0 b2 b4 b6 b8 ba bc be
+    60 |c0 c2 c4 c6 c8 ca cc ce d0 d2 d4 d6 d8 da dc de
+    70 |e0 e2 e4 e6 e8 ea ec ee f0 f2 f4 f6 f8 fa fc fe
+    80 |1b 19 1f 1d 13 11 17 15 0b 09 0f 0d 03 01 07 05
+    90 |3b 39 3f 3d 33 31 37 35 2b 29 2f 2d 23 21 27 25
+    a0 |5b 59 5f 5d 53 51 57 55 4b 49 4f 4d 43 41 47 45
+    b0 |7b 79 7f 7d 73 71 77 75 6b 69 6f 6d 63 61 67 65
+    c0 |9b 99 9f 9d 93 91 97 95 8b 89 8f 8d 83 81 87 85
+    d0 |bb b9 bf bd b3 b1 b7 b5 ab a9 af ad a3 a1 a7 a5
+    e0 |db d9 df dd d3 d1 d7 d5 cb c9 cf cd c3 c1 c7 c5
+    f0 |fb f9 ff fd f3 f1 f7 f5 eb e9 ef ed e3 e1 e7 e5
+
+    (*3)
+       | 0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+    ---|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|
+    00 |00 03 06 05 0c 0f 0a 09 18 1b 1e 1d 14 17 12 11
+    10 |30 33 36 35 3c 3f 3a 39 28 2b 2e 2d 24 27 22 21
+    20 |60 63 66 65 6c 6f 6a 69 78 7b 7e 7d 74 77 72 71
+    30 |50 53 56 55 5c 5f 5a 59 48 4b 4e 4d 44 47 42 41
+    40 |c0 c3 c6 c5 cc cf ca c9 d8 db de dd d4 d7 d2 d1
+    50 |f0 f3 f6 f5 fc ff fa f9 e8 eb ee ed e4 e7 e2 e1
+    60 |a0 a3 a6 a5 ac af aa a9 b8 bb be bd b4 b7 b2 b1
+    70 |90 93 96 95 9c 9f 9a 99 88 8b 8e 8d 84 87 82 81
+    80 |9b 98 9d 9e 97 94 91 92 83 80 85 86 8f 8c 89 8a
+    90 |ab a8 ad ae a7 a4 a1 a2 b3 b0 b5 b6 bf bc b9 ba
+    a0 |fb f8 fd fe f7 f4 f1 f2 e3 e0 e5 e6 ef ec e9 ea
+    b0 |cb c8 cd ce c7 c4 c1 c2 d3 d0 d5 d6 df dc d9 da
+    c0 |5b 58 5d 5e 57 54 51 52 43 40 45 46 4f 4c 49 4a
+    d0 |6b 68 6d 6e 67 64 61 62 73 70 75 76 7f 7c 79 7a
+    e0 |3b 38 3d 3e 37 34 31 32 23 20 25 26 2f 2c 29 2a
+    f0 |0b 08 0d 0e 07 04 01 02 13 10 15 16 1f 1c 19 1a
+
+    (*9)
+       | 0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+    ---|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|
+    00 |00 09 12 1b 24 2d 36 3f 48 41 5a 53 6c 65 7e 77
+    10 |90 99 82 8b b4 bd a6 af d8 d1 ca c3 fc f5 ee e7
+    20 |3b 32 29 20 1f 16 0d 04 73 7a 61 68 57 5e 45 4c
+    30 |ab a2 b9 b0 8f 86 9d 94 e3 ea f1 f8 c7 ce d5 dc
+    40 |76 7f 64 6d 52 5b 40 49 3e 37 2c 25 1a 13 08 01
+    50 |e6 ef f4 fd c2 cb d0 d9 ae a7 bc b5 8a 83 98 91
+    60 |4d 44 5f 56 69 60 7b 72 05 0c 17 1e 21 28 33 3a
+    70 |dd d4 cf c6 f9 f0 eb e2 95 9c 87 8e b1 b8 a3 aa
+    80 |ec e5 fe f7 c8 c1 da d3 a4 ad b6 bf 80 89 92 9b
+    90 |7c 75 6e 67 58 51 4a 43 34 3d 26 2f 10 19 02 0b
+    a0 |d7 de c5 cc f3 fa e1 e8 9f 96 8d 84 bb b2 a9 a0
+    b0 |47 4e 55 5c 63 6a 71 78 0f 06 1d 14 2b 22 39 30
+    c0 |9a 93 88 81 be b7 ac a5 d2 db c0 c9 f6 ff e4 ed
+    d0 |0a 03 18 11 2e 27 3c 35 42 4b 50 59 66 6f 74 7d
+    e0 |a1 a8 b3 ba 85 8c 97 9e e9 e0 fb f2 cd c4 df d6
+    f0 |31 38 23 2a 15 1c 07 0e 79 70 6b 62 5d 54 4f 46
+
+    (*11)
+       | 0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+    ---|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|
+    00 |00 0b 16 1d 2c 27 3a 31 58 53 4e 45 74 7f 62 69
+    10 |b0 bb a6 ad 9c 97 8a 81 e8 e3 fe f5 c4 cf d2 d9
+    20 |7b 70 6d 66 57 5c 41 4a 23 28 35 3e 0f 04 19 12
+    30 |cb c0 dd d6 e7 ec f1 fa 93 98 85 8e bf b4 a9 a2
+    40 |f6 fd e0 eb da d1 cc c7 ae a5 b8 b3 82 89 94 9f
+    50 |46 4d 50 5b 6a 61 7c 77 1e 15 08 03 32 39 24 2f
+    60 |8d 86 9b 90 a1 aa b7 bc d5 de c3 c8 f9 f2 ef e4
+    70 |3d 36 2b 20 11 1a 07 0c 65 6e 73 78 49 42 5f 54
+    80 |f7 fc e1 ea db d0 cd c6 af a4 b9 b2 83 88 95 9e
+    90 |47 4c 51 5a 6b 60 7d 76 1f 14 09 02 33 38 25 2e
+    a0 |8c 87 9a 91 a0 ab b6 bd d4 df c2 c9 f8 f3 ee e5
+    b0 |3c 37 2a 21 10 1b 06 0d 64 6f 72 79 48 43 5e 55
+    c0 |01 0a 17 1c 2d 26 3b 30 59 52 4f 44 75 7e 63 68
+    d0 |b1 ba a7 ac 9d 96 8b 80 e9 e2 ff f4 c5 ce d3 d8
+    e0 |7a 71 6c 67 56 5d 40 4b 22 29 34 3f 0e 05 18 13
+    f0 |ca c1 dc d7 e6 ed f0 fb 92 99 84 8f be b5 a8 a3
+
+    (*13)
+       | 0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+    ---|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|
+    00 |00 0d 1a 17 34 39 2e 23 68 65 72 7f 5c 51 46 4b
+    10 |d0 dd ca c7 e4 e9 fe f3 b8 b5 a2 af 8c 81 96 9b
+    20 |bb b6 a1 ac 8f 82 95 98 d3 de c9 c4 e7 ea fd f0
+    30 |6b 66 71 7c 5f 52 45 48 03 0e 19 14 37 3a 2d 20
+    40 |6d 60 77 7a 59 54 43 4e 05 08 1f 12 31 3c 2b 26
+    50 |bd b0 a7 aa 89 84 93 9e d5 d8 cf c2 e1 ec fb f6
+    60 |d6 db cc c1 e2 ef f8 f5 be b3 a4 a9 8a 87 90 9d
+    70 |06 0b 1c 11 32 3f 28 25 6e 63 74 79 5a 57 40 4d
+    80 |da d7 c0 cd ee e3 f4 f9 b2 bf a8 a5 86 8b 9c 91
+    90 |0a 07 10 1d 3e 33 24 29 62 6f 78 75 56 5b 4c 41
+    a0 |61 6c 7b 76 55 58 4f 42 09 04 13 1e 3d 30 27 2a
+    b0 |b1 bc ab a6 85 88 9f 92 d9 d4 c3 ce ed e0 f7 fa
+    c0 |b7 ba ad a0 83 8e 99 94 df d2 c5 c8 eb e6 f1 fc
+    d0 |67 6a 7d 70 53 5e 49 44 0f 02 15 18 3b 36 21 2c
+    e0 |0c 01 16 1b 38 35 22 2f 64 69 7e 73 50 5d 4a 47
+    f0 |dc d1 c6 cb e8 e5 f2 ff b4 b9 ae a3 80 8d 9a 97
+
+    (*14)
+       | 0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+    ---|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|
+    00 |00 0e 1c 12 38 36 24 2a 70 7e 6c 62 48 46 54 5a
+    10 |e0 ee fc f2 d8 d6 c4 ca 90 9e 8c 82 a8 a6 b4 ba
+    20 |db d5 c7 c9 e3 ed ff f1 ab a5 b7 b9 93 9d 8f 81
+    30 |3b 35 27 29 03 0d 1f 11 4b 45 57 59 73 7d 6f 61
+    40 |ad a3 b1 bf 95 9b 89 87 dd d3 c1 cf e5 eb f9 f7
+    50 |4d 43 51 5f 75 7b 69 67 3d 33 21 2f 05 0b 19 17
+    60 |76 78 6a 64 4e 40 52 5c 06 08 1a 14 3e 30 22 2c
+    70 |96 98 8a 84 ae a0 b2 bc e6 e8 fa f4 de d0 c2 cc
+    80 |41 4f 5d 53 79 77 65 6b 31 3f 2d 23 09 07 15 1b
+    90 |a1 af bd b3 99 97 85 8b d1 df cd c3 e9 e7 f5 fb
+    a0 |9a 94 86 88 a2 ac be b0 ea e4 f6 f8 d2 dc ce c0
+    b0 |7a 74 66 68 42 4c 5e 50 0a 04 16 18 32 3c 2e 20
+    c0 |ec e2 f0 fe d4 da c8 c6 9c 92 80 8e a4 aa b8 b6
+    d0 |0c 02 10 1e 34 3a 28 26 7c 72 60 6e 44 4a 58 56
+    e0 |37 39 2b 25 0f 01 13 1d 47 49 5b 55 7f 71 63 6d
+    f0 |d7 d9 cb c5 ef e1 f3 fd a7 a9 bb b5 9f 91 83 8d
+
+--- Constructing encryption tables ---------------------------------------------
+
+  Encryption goes as this:
+
+    Initial round
+        AddRoundKey
+    Rounds
+        SubBytes
+        ShiftRows
+        MixColumns
+        AddRoundKey
+    Final round
+        SubBytes
+        ShiftRows
+        AddRoundKey
+
+  SubBytes and ShiftRows can switch their order with no effect on the result,
+  so we first do row shift (technically, no shifting is done, we just select
+  proper byte from the 4-byte word as an index to lookup table). SubBytes and
+  MixColumns are then joined into lookup tables.
+  AddRoundKey is normal XOR, so there is no need for optimization.
+
+  SubBytes is simple substitution, but MixColumns is complex operation. However,
+  the MixColumns can be simplified into this:
+
+    b0 = glt2(a0) xor glt3(a1) xor glt1(a2) xor glt1(a3)
+    b1 = glt1(a0) xor glt2(a1) xor glt3(a2) xor glt1(a3)
+    b2 = glt1(a0) xor glt1(a1) xor glt2(a2) xor glt3(a3)
+    b3 = glt3(a0) xor glt1(a1) xor glt1(a2) xor glt2(a3)
+
+  ...where a0..a3 are individual bytes of the input 32bit word, b0..b3 are
+  corresponding bytes in the resulting 32bit word. gltX is Galois Multiplication
+  lookup table for a X multiplier (glt1 does not change the input).
+  For each byte, we can create a 32bit word that will contain both substitution
+  and mix and to get the resulting word, we just XOR all four words (one for
+  each byte). Resulting word will be constructed like this:
+
+    Rw = W1(a0) xor W2(a1) xor W3(a2) xor W4(a3)
+
+  Individual words in encryption tables are constructed like this (i is index in
+  the table):
+
+    Table 1:  W1[i] = [glt2(sub(i)),glt1(sub(i)),glt1(sub(i)),glt3(sub(i))]
+    Table 2:  W2[i] = [glt2(sub(i)),glt1(sub(i)),glt1(sub(i)),glt3(sub(i))]
+    Table 3:  W3[i] = [glt1(sub(i)),glt3(sub(i)),glt2(sub(i)),glt1(sub(i))]
+    Table 4:  W4[i] = [glt1(sub(i)),glt1(sub(i)),glt3(sub(i)),glt2(sub(i))]
+
+  Examples of lookup table word construction:
+
+    Example 1 - Table 1, input byte 0x01
+
+      Substitution:       0x01 -> 0x7c
+
+      Creating mix word:  W = [glt2(0x7c), 0x7c, 0x7c, glt3(0x7c)]
+                          W = [0xf8, 0x7c, 0x7c, 0x84]
+                          W = 0x847c7cf8 <<<
+
+    Example 2 - Table 3, input byte 0xc9
+
+      Substitution:       0xc9 -> 0xdd
+
+      Creating mix word:  W = [0xdd, glt3(0xdd), glt2(0xdd), 0xdd]
+                          W = [0xdd, 0x7c, 0xa1, 0xdd]
+                          W = 0xdda17cdd <<<
+
+  Note that since Galois Multiplication by 1 is used, there are plain (no mix)
+  substitution values contained in all encryption tables.
+
+--- Constructing decryption tables ---------------------------------------------
+
+  Decryption goes as this:
+
+    Initial round
+        AddRoundKey
+    Rounds
+        InvShiftRows
+        InvSubBytes
+        AddRoundKey
+        InvMixColumns
+    Final round
+        InvShiftRows
+        InvSubBytes
+        AddRoundKey
+
+  But since we are using Equivalent Inverse Cipher, it can be written this way:
+
+    Initial round
+        AddRoundKey
+    Rounds
+        InvSubBytes
+        InvShiftRows
+        InvMixColumns
+        AddRoundKey
+    Final round
+        InvSubBytes
+        InvShiftRows
+        AddRoundKey
+
+  ...this allow us to use exactly the same technique as for encryption (lookup
+  tables).
+  Individual words in lookup tables are now constructed this way:
+
+    Table 1:  W1[i] = [glt14(invsub(i)),glt9(invsub(i)),glt13(invsub(i)),glt11(invsub(i))]
+    Table 2:  W2[i] = [glt11(invsub(i)),glt14(invsub(i)),glt9(invsub(i)),glt13(invsub(i))]
+    Table 3:  W3[i] = [glt13(invsub(i)),glt11(invsub(i)),glt14(invsub(i)),glt9(invsub(i))]
+    Table 4:  W4[i] = [glt9(invsub(i)),glt13(invsub(i)),glt11(invsub(i)),glt14(invsub(i))]
+
+  Examples of lookup table word construction:
+
+    Example 1 - Table 2, input byte 0x07
+
+      Substitution:       0x07 -> 0x38
+
+      Creating mix word:  W = [glt11(0x38), glt14(0x38), glt9(0x38), glt13(0x38)]
+                          W = [0x93, 0x4b, 0xe3, 0x03]
+                          W = 0x03e34b93 <<<
+
+    Example 2 - Table 4, input byte 0x5a
+
+      Substitution:       0x5a -> 0x46
+
+      Creating mix word:  W = [glt9(0x46), glt13(0x46), glt11(0x46), glt14(0x46)]
+                          W = [0x40, 0x43, 0xcc, 0x89]
+                          W = 0x89cc4340 <<<
+
+  Note that since Galois Multiplication by 1 is NOT used this time, there are no
+  plain substitution values in any table - we need original inverse substitution
+  table for this.
+
+}
 const
-  EncTab1: Array[Byte] of TRijWord = (
+  // Encryption lookup tables
+  EncTab1: array[Byte] of TRijWord = (
     $A56363C6, $847C7CF8, $997777EE, $8D7B7BF6, $0DF2F2FF, $BD6B6BD6, $B16F6FDE, $54C5C591,
     $50303060, $03010102, $A96767CE, $7D2B2B56, $19FEFEE7, $62D7D7B5, $E6ABAB4D, $9A7676EC,
     $45CACA8F, $9D82821F, $40C9C989, $877D7DFA, $15FAFAEF, $EB5959B2, $C947478E, $0BF0F0FB,
@@ -594,7 +898,7 @@ const
     $8F8C8C03, $F8A1A159, $80898909, $170D0D1A, $DABFBF65, $31E6E6D7, $C6424284, $B86868D0,
     $C3414182, $B0999929, $772D2D5A, $110F0F1E, $CBB0B07B, $FC5454A8, $D6BBBB6D, $3A16162C);
 
-  EncTab2: Array[Byte] of TRijWord = (
+  EncTab2: array[Byte] of TRijWord = (
     $6363C6A5, $7C7CF884, $7777EE99, $7B7BF68D, $F2F2FF0D, $6B6BD6BD, $6F6FDEB1, $C5C59154,
     $30306050, $01010203, $6767CEA9, $2B2B567D, $FEFEE719, $D7D7B562, $ABAB4DE6, $7676EC9A,
     $CACA8F45, $82821F9D, $C9C98940, $7D7DFA87, $FAFAEF15, $5959B2EB, $47478EC9, $F0F0FB0B,
@@ -628,7 +932,7 @@ const
     $8C8C038F, $A1A159F8, $89890980, $0D0D1A17, $BFBF65DA, $E6E6D731, $424284C6, $6868D0B8,
     $414182C3, $999929B0, $2D2D5A77, $0F0F1E11, $B0B07BCB, $5454A8FC, $BBBB6DD6, $16162C3A);
 
-  EncTab3: Array[Byte] of TRijWord = (
+  EncTab3: array[Byte] of TRijWord = (
     $63C6A563, $7CF8847C, $77EE9977, $7BF68D7B, $F2FF0DF2, $6BD6BD6B, $6FDEB16F, $C59154C5,
     $30605030, $01020301, $67CEA967, $2B567D2B, $FEE719FE, $D7B562D7, $AB4DE6AB, $76EC9A76,
     $CA8F45CA, $821F9D82, $C98940C9, $7DFA877D, $FAEF15FA, $59B2EB59, $478EC947, $F0FB0BF0,
@@ -662,7 +966,7 @@ const
     $8C038F8C, $A159F8A1, $89098089, $0D1A170D, $BF65DABF, $E6D731E6, $4284C642, $68D0B868,
     $4182C341, $9929B099, $2D5A772D, $0F1E110F, $B07BCBB0, $54A8FC54, $BB6DD6BB, $162C3A16);
 
-  EncTab4: Array[Byte] of TRijWord = (
+  EncTab4: array[Byte] of TRijWord = (
     $C6A56363, $F8847C7C, $EE997777, $F68D7B7B, $FF0DF2F2, $D6BD6B6B, $DEB16F6F, $9154C5C5,
     $60503030, $02030101, $CEA96767, $567D2B2B, $E719FEFE, $B562D7D7, $4DE6ABAB, $EC9A7676,
     $8F45CACA, $1F9D8282, $8940C9C9, $FA877D7D, $EF15FAFA, $B2EB5959, $8EC94747, $FB0BF0F0,
@@ -696,7 +1000,8 @@ const
     $038F8C8C, $59F8A1A1, $09808989, $1A170D0D, $65DABFBF, $D731E6E6, $84C64242, $D0B86868,
     $82C34141, $29B09999, $5A772D2D, $1E110F0F, $7BCBB0B0, $A8FC5454, $6DD6BBBB, $2C3A1616);
 
-  DecTab1: Array[Byte] of TRijWord = (
+  // Decryption lookup tables  
+  DecTab1: array[Byte] of TRijWord = (
     $50A7F451, $5365417E, $C3A4171A, $965E273A, $CB6BAB3B, $F1459D1F, $AB58FAAC, $9303E34B,
     $55FA3020, $F66D76AD, $9176CC88, $254C02F5, $FCD7E54F, $D7CB2AC5, $80443526, $8FA362B5,
     $495AB1DE, $671BBA25, $980EEA45, $E1C0FE5D, $02752FC3, $12F04C81, $A397468D, $C6F9D36B,
@@ -730,7 +1035,7 @@ const
     $81F3AFCA, $3EC468B9, $2C342438, $5F40A3C2, $72C31D16, $0C25E2BC, $8B493C28, $41950DFF,
     $7101A839, $DEB30C08, $9CE4B4D8, $90C15664, $6184CB7B, $70B632D5, $745C6C48, $4257B8D0);
 
-  DecTab2: Array[Byte] of TRijWord = (
+  DecTab2: array[Byte] of TRijWord = (
     $A7F45150, $65417E53, $A4171AC3, $5E273A96, $6BAB3BCB, $459D1FF1, $58FAACAB, $03E34B93,
     $FA302055, $6D76ADF6, $76CC8891, $4C02F525, $D7E54FFC, $CB2AC5D7, $44352680, $A362B58F,
     $5AB1DE49, $1BBA2567, $0EEA4598, $C0FE5DE1, $752FC302, $F04C8112, $97468DA3, $F9D36BC6,
@@ -764,7 +1069,7 @@ const
     $F3AFCA81, $C468B93E, $3424382C, $40A3C25F, $C31D1672, $25E2BC0C, $493C288B, $950DFF41,
     $01A83971, $B30C08DE, $E4B4D89C, $C1566490, $84CB7B61, $B632D570, $5C6C4874, $57B8D042);
 
-  DecTab3: Array[Byte] of TRijWord = (
+  DecTab3: array[Byte] of TRijWord = (
     $F45150A7, $417E5365, $171AC3A4, $273A965E, $AB3BCB6B, $9D1FF145, $FAACAB58, $E34B9303,
     $302055FA, $76ADF66D, $CC889176, $02F5254C, $E54FFCD7, $2AC5D7CB, $35268044, $62B58FA3,
     $B1DE495A, $BA25671B, $EA45980E, $FE5DE1C0, $2FC30275, $4C8112F0, $468DA397, $D36BC6F9,
@@ -798,7 +1103,7 @@ const
     $AFCA81F3, $68B93EC4, $24382C34, $A3C25F40, $1D1672C3, $E2BC0C25, $3C288B49, $0DFF4195,
     $A8397101, $0C08DEB3, $B4D89CE4, $566490C1, $CB7B6184, $32D570B6, $6C48745C, $B8D04257);
 
-  DecTab4: Array[Byte] of TRijWord = (
+  DecTab4: array[Byte] of TRijWord = (                                                    
     $5150A7F4, $7E536541, $1AC3A417, $3A965E27, $3BCB6BAB, $1FF1459D, $ACAB58FA, $4B9303E3,
     $2055FA30, $ADF66D76, $889176CC, $F5254C02, $4FFCD7E5, $C5D7CB2A, $26804435, $B58FA362,
     $DE495AB1, $25671BBA, $45980EEA, $5DE1C0FE, $C302752F, $8112F04C, $8DA39746, $6BC6F9D3,
@@ -832,13 +1137,15 @@ const
     $CA81F3AF, $B93EC468, $382C3424, $C25F40A3, $1672C31D, $BC0C25E2, $288B493C, $FF41950D,
     $397101A8, $08DEB30C, $D89CE4B4, $6490C156, $7B6184CB, $D570B632, $48745C6C, $D04257B8);
 
-  RCon: Array[1..29] of TRijWord = (
+  // Round constants
+  RCon: array[1..29] of TRijWord = (
     $00000001, $00000002, $00000004, $00000008, $00000010, $00000020, $00000040, $00000080,
     $0000001B, $00000036, $0000006c, $000000d8, $000000ab, $0000004d, $0000009a, $0000002f,
     $0000005e, $000000bc, $00000063, $000000c6, $00000097, $00000035, $0000006a, $000000d4,
     $000000b3, $0000007d, $000000fa, $000000ef, $000000c5);
 
-  InvSub: Array[Byte] of Byte = (
+  // Inverse substitution table
+  InvSub: array[Byte] of Byte = (
     $52, $09, $6A, $D5, $30, $36, $A5, $38, $BF, $40, $A3, $9E, $81, $F3, $D7, $FB,
     $7C, $E3, $39, $82, $9B, $2F, $FF, $87, $34, $8E, $43, $44, $C4, $DE, $E9, $CB,
     $54, $7B, $94, $32, $A6, $C2, $23, $3D, $EE, $4C, $95, $0B, $42, $FA, $C3, $4E,
@@ -856,7 +1163,7 @@ const
     $A0, $E0, $3B, $4D, $AE, $2A, $F5, $B0, $C8, $EB, $BB, $3C, $83, $53, $99, $61,
     $17, $2B, $04, $7E, $BA, $77, $D6, $26, $E1, $69, $14, $63, $55, $21, $0C, $7D);
 
-  ShiftRowOffsets: Array[4..8,0..3] of Integer = (
+  ShiftRowOffsets: array[4..8,0..3] of Integer = (
     (0,1,2,3),(0,1,2,3),(0,1,2,3),(0,1,2,4),(0,1,3,4));
 
 //******************************************************************************
@@ -865,11 +1172,11 @@ procedure TRijndaelCipher.SetKeyLength(Value: TRijLength);
 begin
 fKeyLength := Value;
 case fKeyLength of
-  rl128bit: fNk := 4;
-  rl160bit: fNk := 5;
-  rl192bit: fNk := 6;
-  rl224bit: fNk := 7;
-  rl256bit: fNk := 8;
+  r128bit: fNk := 4;
+  r160bit: fNk := 5;
+  r192bit: fNk := 6;
+  r224bit: fNk := 7;
+  r256bit: fNk := 8;
 else
   raise Exception.CreateFmt('TRijndaelCipher.SetKeyLength: Unsupported key length (%d).',[Ord(Value)]);
 end;
@@ -883,11 +1190,11 @@ procedure TRijndaelCipher.SetBlockLength(Value: TRijLength);
 begin
 fBlockLength := Value;
 case fBlockLength of
-  rl128bit: fNb := 4;
-  rl160bit: fNb := 5;
-  rl192bit: fNb := 6;
-  rl224bit: fNb := 7;
-  rl256bit: fNb := 8;
+  r128bit: fNb := 4;
+  r160bit: fNb := 5;
+  r192bit: fNb := 6;
+  r224bit: fNb := 7;
+  r256bit: fNb := 8;
 else
   raise Exception.CreateFmt('TRijndaelCipher.SetBlockLength: Unsupported block length (%d).',[Ord(Value)]);
 end;
@@ -897,30 +1204,93 @@ end;
 
 //------------------------------------------------------------------------------
 
+{
+  Pseudocode of key expansion (Equivalent Inverse Cipher is used).
+  Source: FIPS 197.
+
+  KeyExpansion(byte key[4*Nk], word w[Nb*(Nr+1)], Nk)
+  begin
+    word temp
+    i = 0
+
+    while (i < Nk)
+      w[i] = word(key[4*i], key[4*i+1], key[4*i+2], key[4*i+3])
+      i = i+1
+    end while
+
+    i = Nk
+    while (i < Nb * (Nr+1)]
+      temp = w[i-1]
+      if (i mod Nk = 0)
+        temp = SubWord(RotWord(temp)) xor Rcon[i/Nk]
+      else if (Nk > 6 and i mod Nk = 4)
+        temp = SubWord(temp)
+      end if
+      w[i] = w[i-Nk] xor temp
+      i = i + 1
+    end while
+
+    // Equivalent Inverse Cipher code follows (used only when expanding key for decryption)
+
+    for i = 0 step 1 to (Nr+1)*Nb-1
+      dw[i] = w[i]
+    end for
+
+    for round = 1 step 1 to Nr-1
+      InvMixColumns(dw[round*Nb, (round+1)*Nb-1]) // note change of type
+    end for
+  end
+}
 procedure TRijndaelCipher.CipherInit;
 var
-  i,j:  Integer;
-  Temp: TRijWord;
+  i,j:    Integer;
+  Temp:   TRijWord;
 begin
-Move(fKey^,fRijKey,fKeyBytes);
-// Rijndael initialization
+{
+  Working with little endian words, no need for indexing bytes.
+
+  Note that all words in KeyShedule will have reversed byte order in comparisson
+  with test cases.
+}
 For i := 0 to Pred(fNk) do
-  fKeySchedule[i] := fRijKey[4*i] or (fRijKey[4*i+1] shl 8) or (fRijKey[4*i+2] shl 16) or (fRijKey[4*i+3] shl 24);
+  fKeySchedule[i] := PRijWord(PtrUInt(fKey) + PtrUInt(4 * i))^;
+{
+  Lowest byte of all words in tncoding table number 4 (EncTab4) contains plain
+  substitution values - that is why this table is used.
+
+  RotWord rotates bytes in input 32bit word by one place as this:
+
+     RotWord(w[a0,a1,a2,a3]) = w[a1,a2,a3,a0]
+
+  Instead of implementing this as a function, it is done by selecting
+  appropriate byte from input word as an index for substitution table.
+
+  Other than that, this part does not differ from pseudocode.
+}
 For i := fNk to Pred(fNb * (fNr + 1)) do
   begin
     Temp := fKeySchedule[i - 1];
     If (i mod fNk = 0) then
-      Temp := (Byte(EncTab4[Byte(Temp shr 8)]) or
-              (Byte(EncTab4[Byte(Temp shr 16)]) shl 8) or
-              (Byte(EncTab4[Byte(Temp shr 24)]) shl 16) or
-              (Byte(EncTab4[Byte(Temp)]) shl 24)) xor RCon[i div fNk]
+      Temp := (EncTab4[Byte(Temp shr 8)] and $FF) or
+             ((EncTab4[Byte(Temp shr 16)] and $FF) shl 8) or
+             ((EncTab4[Byte(Temp shr 24)] and $FF) shl 16) or
+              (EncTab4[Byte(Temp)] shl 24) xor RCon[i div fNk]
     else If (fNk > 6) and (i mod fNk = 4) then
-      Temp := Byte(EncTab4[Byte(Temp)]) or
-             (Byte(EncTab4[Byte(Temp shr 8)]) shl 8) or
-             (Byte(EncTab4[Byte(Temp shr 16)]) shl 16) or
-             (Byte(EncTab4[Byte(Temp shr 24)]) shl 24);
+      Temp := (EncTab4[Byte(Temp)] and $FF) or
+             ((EncTab4[Byte(Temp shr 8)] and $FF) shl 8) or
+             ((EncTab4[Byte(Temp shr 16)] and $FF) shl 16) or
+             ((EncTab4[Byte(Temp shr 24)] and $FF) shl 24);
     fKeySchedule[i] := fKeySchedule[i - fNk] xor Temp;
   end;
+{
+    for i = 0 step 1 to (Nr+1)*Nb-1
+      dw[i] = w[i]
+    end for
+
+    for round = 1 step 1 to Nr-1
+      InvMixColumns(dw[round*Nb, (round+1)*Nb-1]) // note change of type
+    end for
+}
 If fMode = cmDecrypt then
   For i := 1 to Pred(fNr) do
     For j := (i * fNb) to ((i + 1) * fNb - 1) do
@@ -966,10 +1336,10 @@ For j := 1 to (fNr - 1) do
                   fKeySchedule[j * fNb + i];
   end;
 For i := 0 to Pred(fNb) do
-  TempState[i] := Byte(EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,0])])]) xor
-                 (Byte(EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,1])] shr 8)]) shl 8) xor
-                 (Byte(EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,2])] shr 16)]) shl 16) xor
-                 (Byte(EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,3])] shr 24)]) shl 24) xor
+  TempState[i] := (EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,0])])] and $FF) xor
+                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,1])] shr 8)] and $FF) shl 8) xor
+                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,2])] shr 16)] and $FF) shl 16) xor
+                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,3])] shr 24)] and $FF) shl 24) xor
                   fKeySchedule[fNr * fNb + i];
 Move(TempState,Output,fBlockBytes);
 end;
@@ -1031,14 +1401,14 @@ end;
 
 procedure TRijndaelCipher.Init(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
 begin
-raise Exception.Create('TRijndaelCipher.Init: Calling this method is not allowed in this class.');
+raise Exception.Create('TRijndaelCipher.Init: Calling this method is not allowed.');
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
 
 procedure TRijndaelCipher.Init(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
 begin
-raise Exception.Create('TRijndaelCipher.Init: Calling this method is not allowed in this class.');
+raise Exception.Create('TRijndaelCipher.Init: Calling this method is not allowed.');
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
