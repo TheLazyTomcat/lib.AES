@@ -89,7 +89,7 @@ type
   TRijWord = UInt32;
   PRijWord = ^TRijWord;
 
-  TRijKeySchedule = array[0..119] of TRijWord; {$message '120? shouldn''t it be 72 [0..71]?'}
+  TRijKeySchedule = array[0..119] of TRijWord;
   TRijState       = array[0..7] of TRijWord;   {256 bits}
 
   TRijndaelCipher = class(TBlockCipher)
@@ -562,9 +562,8 @@ end;
 {==============================================================================}
 {
   Majority of calculations is replaced by following lookup tables.
-  Also note that current imlementation is optimized for little endian system,
-  but original Rijndael specification is for big endian. Any intermediate value
-  will have reversed endianees in comparison with test vectors.
+  Also note that current imlementation is optimized for little endian systems,
+  and would not work on big endian system.
 
 --- Original data --------------------------------------------------------------
 
@@ -732,135 +731,10 @@ end;
     e0 |37 39 2b 25 0f 01 13 1d 47 49 5b 55 7f 71 63 6d
     f0 |d7 d9 cb c5 ef e1 f3 fd a7 a9 bb b5 9f 91 83 8d
 
---- Constructing encryption tables ---------------------------------------------
-
-  Encryption goes as this:
-
-    Initial round
-        AddRoundKey
-    Rounds
-        SubBytes
-        ShiftRows
-        MixColumns
-        AddRoundKey
-    Final round
-        SubBytes
-        ShiftRows
-        AddRoundKey
-
-  SubBytes and ShiftRows can switch their order with no effect on the result,
-  so we first do row shift (technically, no shifting is done, we just select
-  proper byte from the 4-byte word as an index to lookup table). SubBytes and
-  MixColumns are then joined into lookup tables.
-  AddRoundKey is normal XOR, so there is no need for optimization.
-
-  SubBytes is simple substitution, but MixColumns is complex operation. However,
-  the MixColumns can be simplified into this:
-
-    b0 = glt2(a0) xor glt3(a1) xor glt1(a2) xor glt1(a3)
-    b1 = glt1(a0) xor glt2(a1) xor glt3(a2) xor glt1(a3)
-    b2 = glt1(a0) xor glt1(a1) xor glt2(a2) xor glt3(a3)
-    b3 = glt3(a0) xor glt1(a1) xor glt1(a2) xor glt2(a3)
-
-  ...where a0..a3 are individual bytes of the input 32bit word, b0..b3 are
-  corresponding bytes in the resulting 32bit word. gltX is Galois Multiplication
-  lookup table for a X multiplier (glt1 does not change the input).
-  For each byte, we can create a 32bit word that will contain both substitution
-  and mix and to get the resulting word, we just XOR all four words (one for
-  each byte). Resulting word will be constructed like this:
-
-    Rw = W1(a0) xor W2(a1) xor W3(a2) xor W4(a3)
-
-  Individual words in encryption tables are constructed like this (i is index in
-  the table):
-
-    Table 1:  W1[i] = [glt2(sub(i)),glt1(sub(i)),glt1(sub(i)),glt3(sub(i))]
-    Table 2:  W2[i] = [glt2(sub(i)),glt1(sub(i)),glt1(sub(i)),glt3(sub(i))]
-    Table 3:  W3[i] = [glt1(sub(i)),glt3(sub(i)),glt2(sub(i)),glt1(sub(i))]
-    Table 4:  W4[i] = [glt1(sub(i)),glt1(sub(i)),glt3(sub(i)),glt2(sub(i))]
-
-  Examples of lookup table word construction:
-
-    Example 1 - Table 1, input byte 0x01
-
-      Substitution:       0x01 -> 0x7c
-
-      Creating mix word:  W = [glt2(0x7c), 0x7c, 0x7c, glt3(0x7c)]
-                          W = [0xf8, 0x7c, 0x7c, 0x84]
-                          W = 0x847c7cf8 <<<
-
-    Example 2 - Table 3, input byte 0xc9
-
-      Substitution:       0xc9 -> 0xdd
-
-      Creating mix word:  W = [0xdd, glt3(0xdd), glt2(0xdd), 0xdd]
-                          W = [0xdd, 0x7c, 0xa1, 0xdd]
-                          W = 0xdda17cdd <<<
-
-  Note that since Galois Multiplication by 1 is used, there are plain (no mix)
-  substitution values contained in all encryption tables.
-
 --- Constructing decryption tables ---------------------------------------------
 
-  Decryption goes as this:
-
-    Initial round
-        AddRoundKey
-    Rounds
-        InvShiftRows
-        InvSubBytes
-        AddRoundKey
-        InvMixColumns
-    Final round
-        InvShiftRows
-        InvSubBytes
-        AddRoundKey
-
-  But since we are using Equivalent Inverse Cipher, it can be written this way:
-
-    Initial round
-        AddRoundKey
-    Rounds
-        InvSubBytes
-        InvShiftRows
-        InvMixColumns
-        AddRoundKey
-    Final round
-        InvSubBytes
-        InvShiftRows
-        AddRoundKey
-
-  ...this allow us to use exactly the same technique as for encryption (lookup
-  tables).
-  Individual words in lookup tables are now constructed this way:
-
-    Table 1:  W1[i] = [glt14(invsub(i)),glt9(invsub(i)),glt13(invsub(i)),glt11(invsub(i))]
-    Table 2:  W2[i] = [glt11(invsub(i)),glt14(invsub(i)),glt9(invsub(i)),glt13(invsub(i))]
-    Table 3:  W3[i] = [glt13(invsub(i)),glt11(invsub(i)),glt14(invsub(i)),glt9(invsub(i))]
-    Table 4:  W4[i] = [glt9(invsub(i)),glt13(invsub(i)),glt11(invsub(i)),glt14(invsub(i))]
-
-  Examples of lookup table word construction:
-
-    Example 1 - Table 2, input byte 0x07
-
-      Substitution:       0x07 -> 0x38
-
-      Creating mix word:  W = [glt11(0x38), glt14(0x38), glt9(0x38), glt13(0x38)]
-                          W = [0x93, 0x4b, 0xe3, 0x03]
-                          W = 0x03e34b93 <<<
-
-    Example 2 - Table 4, input byte 0x5a
-
-      Substitution:       0x5a -> 0x46
-
-      Creating mix word:  W = [glt9(0x46), glt13(0x46), glt11(0x46), glt14(0x46)]
-                          W = [0x40, 0x43, 0xcc, 0x89]
-                          W = 0x89cc4340 <<<
-
-  Note that since Galois Multiplication by 1 is NOT used this time, there are no
-  plain substitution values in any table - we need original inverse substitution
-  table for this.
-
+  See methods Encrypt and Decrypt for detailed description of why and how the
+  following tables are created.
 }
 const
   // Encryption lookup tables
@@ -1163,7 +1037,7 @@ const
     $A0, $E0, $3B, $4D, $AE, $2A, $F5, $B0, $C8, $EB, $BB, $3C, $83, $53, $99, $61,
     $17, $2B, $04, $7E, $BA, $77, $D6, $26, $E1, $69, $14, $63, $55, $21, $0C, $7D);
 
-  ShiftRowOffsets: array[4..8,0..3] of Integer = (
+  ShiftRowsOffset: array[4..8,0..3] of Integer = (
     (0,1,2,3),(0,1,2,3),(0,1,2,3),(0,1,2,4),(0,1,3,4));
 
 //******************************************************************************
@@ -1204,9 +1078,11 @@ end;
 
 //------------------------------------------------------------------------------
 
-{
-  Pseudocode of key expansion (Equivalent Inverse Cipher is used).
+(*
+  Complete pseudocode of key expansion (Equivalent Inverse Cipher is used).
   Source: FIPS 197.
+
+ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
   KeyExpansion(byte key[4*Nk], word w[Nb*(Nr+1)], Nk)
   begin
@@ -1240,33 +1116,38 @@ end;
       InvMixColumns(dw[round*Nb, (round+1)*Nb-1]) // note change of type
     end for
   end
-}
+
+ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+*)
 procedure TRijndaelCipher.CipherInit;
 var
   i,j:    Integer;
   Temp:   TRijWord;
 begin
-{
-  Working with little endian words, no need for indexing bytes.
+(*
+  Key words are simply copied into lower Nk words of key shedule.
 
   Note that all words in KeyShedule will have reversed byte order in comparisson
-  with test cases.
-}
+  with test cases. This is normal and desired behavior and is accounted for in
+  further computations.
+*)
 For i := 0 to Pred(fNk) do
   fKeySchedule[i] := PRijWord(PtrUInt(fKey) + PtrUInt(4 * i))^;
-{
-  Lowest byte of all words in tncoding table number 4 (EncTab4) contains plain
-  substitution values - that is why this table is used.
+(*
+  RotWord rotates bytes in input 32bit word one place up as this:
 
-  RotWord rotates bytes in input 32bit word by one place as this:
-
-     RotWord(w[a0,a1,a2,a3]) = w[a1,a2,a3,a0]
+     RotWord(w{a0,a1,a2,a3}) = w{a1,a2,a3,a0}
 
   Instead of implementing this as a function, it is done by selecting
   appropriate byte from input word as an index for substitution table.
 
+  SubWord is done by indexing encryption table 4. Lowest byte of all words in
+  encoding table 4 (EncTab4) contains plain substitution values (see method
+  Encrypt for description how the words in this table are constructed), so we
+  use it as a substitution lookup table instead of declaring one separately.
+
   Other than that, this part does not differ from pseudocode.
-}
+*)
 For i := fNk to Pred(fNb * (fNr + 1)) do
   begin
     Temp := fKeySchedule[i - 1];
@@ -1282,16 +1163,50 @@ For i := fNk to Pred(fNb * (fNr + 1)) do
              ((EncTab4[Byte(Temp shr 24)] and $FF) shl 24);
     fKeySchedule[i] := fKeySchedule[i - fNk] xor Temp;
   end;
-{
-    for i = 0 step 1 to (Nr+1)*Nb-1
-      dw[i] = w[i]
-    end for
+(*
+  Modified decryption shedule (dw) is not created, modified values are instead
+  stored in normal shedule which in turn cannot be used for encryption (not a
+  problem, TBlockCipher can be initialized either for decryption or encryption
+  mode, but not both).
 
-    for round = 1 step 1 to Nr-1
-      InvMixColumns(dw[round*Nb, (round+1)*Nb-1]) // note change of type
-    end for
-}
+  Modified value is computed this way:
+
+    mKSw = InvMixColumns(KSw)
+
+  This can be rewritten for individual bytes as follows:
+
+    mKSw0 = glt14[KSw0] xor glt11[KSw1] xor glt13[KSw2] xor glt9[KSw3]
+    mKSw1 = glt9[KSw0] xor glt14[KSw1] xor glt11[KSw2] xor glt13[KSw3]
+    mKSw2 = glt13[KSw0] xor glt9[KSw1] xor glt14[KSw2] xor glt11[KSw3]
+    mKSw3 = glt11[KSw0] xor glt13[KSw1] xor glt9[KSw2] xor glt14[KSw3]
+
+  ...and since decoding tables a constructed this way:
+
+    Table 1:  W1[i] = [glt14(invsub(i)),glt9(invsub(i)),glt13(invsub(i)),glt11(invsub(i))]
+    Table 2:  W2[i] = [glt11(invsub(i)),glt14(invsub(i)),glt9(invsub(i)),glt13(invsub(i))]
+    Table 3:  W3[i] = [glt13(invsub(i)),glt11(invsub(i)),glt14(invsub(i)),glt9(invsub(i))]
+    Table 4:  W4[i] = [glt9(invsub(i)),glt13(invsub(i)),glt11(invsub(i)),glt14(invsub(i))]
+
+  ...we can use them in here for lookup. Only problem is, that every decoding
+  table already incorporates inverse substitution, so every byte used to index
+  word in decoding table must be first rectified to a state in which applying
+  invsub() on it returns its original value, which will result in this:
+
+    W1[rectified(i)] = {glt14[i],glt9[i],glt13[i],glt11[i]}
+
+  This is easily done if we consider this fact:
+
+    invsub(sub(B)) = B
+
+  What we need is therefore simple substitution. Encoding table 4 can be used
+  for substitution since lowest byte of each its word contains plain
+  substitution value for a given index (byte).
+  Finally, modified shedule word is constructed this way:
+
+    mKSw = W1[sub(KSw0)] xor W2[sub(KSw1)] xor W3[sub(KSw2)] xor W4[sub(KSw3)]
+*)
 If fMode = cmDecrypt then
+{$message 'merge cycles'}
   For i := 1 to Pred(fNr) do
     For j := (i * fNb) to ((i + 1) * fNb - 1) do
       fKeySchedule[j] := DecTab1[Byte(EncTab4[Byte(fKeySchedule[j])])] xor
@@ -1309,12 +1224,43 @@ end;
 
 //------------------------------------------------------------------------------
 
+(*
+  Complete pseudocode of block encryption.
+  Source: FIPS 197.
+
+ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  Cipher(byte in[4*Nb], byte out[4*Nb], word w[Nb*(Nr+1)])
+  begin
+    byte state[4,Nb]
+
+    state = in
+
+    AddRoundKey(state, w[0, Nb-1])
+
+    for round = 1 step 1 to Nr–1
+      SubBytes(state)
+      ShiftRows(state)
+      MixColumns(state)
+      AddRoundKey(state, w[round*Nb, (round+1)*Nb-1])
+    end for
+
+    SubBytes(state)
+    ShiftRows(state)
+    AddRoundKey(state, w[Nr*Nb, (Nr+1)*Nb-1])
+
+    out = state
+  end
+
+ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+*)
 procedure TRijndaelCipher.Encrypt(const Input; out Output);
 var
   i,j:        Integer;
   State:      TRijState;
   TempState:  TRijState;
 
+  {$message 'remove rsize param, take value from fNb'}
   Function RoundIdx(RSize,Start,Off: Integer): Integer;
   begin
     Result := Start + Off;
@@ -1323,29 +1269,218 @@ var
   end;
 
 begin
+(*
+  AddRoundKey at this point is simple XOR of words from inpuf block with key
+  shedule.
+*)
 For i := 0 to Pred(fNb) do
   State[i] := TRijState(Input)[i] xor fKeySchedule[i];
+(*
+  SubBytes and ShiftRows are switched - they are commutable, so result is not
+  affected by this. ShiftRows is therefore done first and SubBytes and
+  MixColumns are merged into one operation and done using encryption lookup
+  tables.
+
+--- ShiftRows ------------------------------------------------------------------
+
+  ShiftRows is doing byte rotation on state rows (that is, between individual
+  words) by a predefined number of places (this number depends on a row that
+  is being shifted and size of a cipher block - see table ShiftRowsOffset for
+  actual data). It rotates the bytes to a lower places (down).
+  For example, shift by a one place will look like this:
+
+    ShiftRows(w{a0,a1,a2,a3}) = w{a1,a2,a3,a0}
+
+  If we assume 6-word state, shifting third row by two places will do this:
+
+    w0 | w1 | w2 | w3 | w4 | w5                 w0 | w1 | w2 | w3 | w4 | w5
+   -----------------------------               -----------------------------
+    a0 | b0 | c0 | d0 | e0 | f0                 a0 | b0 | c0 | d0 | e0 | f0
+    a1 | b1 | c1 | d1 | e1 | f1                 a1 | b1 | c1 | d1 | e1 | f1
+    a2 | b2 | c2 | d2 | e2 | f2 - rotate by 2 - c2 | d2 | e2 | f2 | a2 | b2
+    a3 | b3 | c3 | d3 | e3 | f3                 a3 | b3 | c3 | d3 | e3 | f3
+
+  In this implementation, however, it is done diferently.
+  For a further computation after ShiftRows, we need to extract four bytes as an
+  indices for a lookup table. It would be normally done by selecting a word
+  in a shifted state and then using its constituting bytes. Instead of this, we
+  carefully select from which state word we extract each byte.
+  Byte, that is N, where N is shift offset, number of places higher in unshifted
+  state than the word we would select in a shifted state, is selected - indices
+  that fall out of boundary are wrapped.
+
+  For example, if we want to select third word (w2) in a 6-word state above,
+  we do it this way:
+
+    W = {byte #0 of w[2 + first row offset], byte #1 of w[2 + second row offset],
+         byte #2 of w[2 + third row offset], byte #3 of w[2 + fourth row offset]}
+
+           first row offset = 0  second row offset = 0
+           third row offset = 2  fourth row offset = 0
+
+    W = {byte #0 of w2, byte #1 of w2, byte #2 of w4, byte #3 of w2}
+
+    W = {c0, c1, e2, c3} <<<
+
+
+  Second example - let's say we have this state:
+
+    w0 | w1 | w2 | w3
+   -------------------
+    a0 | b0 | c0 | d0  - should be rotated by 0
+    a1 | b1 | c1 | d1  - should be rotated by 1
+    a2 | b2 | c2 | d2  - should be rotated by 2
+    a3 | b3 | c3 | d3  - should be rotated by 4
+
+  ... and we want second word (w1) as it would be in a shifted state.
+
+    W = {byte 0 of w[1 + first row offset], byte 1 of w[1 + second row offset],
+         byte 2 of w[1 + third row offset], byte 3 of w[1 + fourth row offset]}
+
+           first row offset = 0  second row offset = 1
+           third row offset = 2  fourth row offset = 4
+
+    W = {byte 0 of w1, byte 1 of w2, byte 2 of w3, byte 3 of w1}
+
+    W = {b0, c1, d2, b3} <<<
+
+
+--- SubBytes + MixColumns ------------------------------------------------------
+
+  As was already said, SubBytes and MixColumns are merged and done using
+  encryption lookup tables.
+
+  SubBytes is simple substitution - a byte in a word is replaced by a different
+  byte according to some rule. This itself is usually done by a lookup table.
+
+  MixColumns is very complex operation, but can be simplified for individual
+  bytes in a processed word to a following formula:
+
+    b0 = glt2[a0] xor glt3[a1] xor glt1[a2] xor glt1[a3]
+    b1 = glt1[a0] xor glt2[a1] xor glt3[a2] xor glt1[a3]
+    b2 = glt1[a0] xor glt1[a1] xor glt2[a2] xor glt3[a3]
+    b3 = glt3[a0] xor glt1[a1] xor glt1[a2] xor glt2[a3]
+
+  ...where a0..a3 are individual bytes of the input 32bit word, b0..b3 are
+  corresponding bytes in the resulting 32bit word. gltX is Galois Multiplication
+  lookup table for a X multiplier (note that glt1 does not change the value).
+
+  It should be apparent form this formula, that we can actually create four
+  tables of precomputed 32bit words for each byte that vould be passed to
+  MixColumns function. To merge it with SubBytes, we just use substituted bytes
+  to index gltX tables instead of original bytes.
+  The tables are therefore constructed this way (i is index in the table):
+
+    Table 1:  W1[i] = {glt2[sub(i)],glt1[sub(i)],glt1[sub(i)],glt3[sub(i)]}
+    Table 2:  W2[i] = {glt3[sub(i)],glt2[sub(i)],glt1[sub(i)],glt1[sub(i)]}
+    Table 3:  W3[i] = {glt1[sub(i)],glt3[sub(i)],glt2[sub(i)],glt1[sub(i)]}
+    Table 4:  W4[i] = {glt1[sub(i)],glt1[sub(i)],glt3[sub(i)],glt2[sub(i)]}
+
+  To get the resulting word, we just XOR all four words from the tables that we
+  obtain by indexing them with corresponding bytes from the input word (returned
+  from ShiftRows function):
+
+    Rw = W1[a0] xor W2[a1] xor W3[a2] xor W4[a3]
+
+
+  Examples of lookup table word construction:
+
+    Example 1 - Table 1, input byte 0x01
+
+      Substitution:       0x01 -> 0x7c
+
+      Creating mix word:  W = {glt2[0x7c], 0x7c, 0x7c, glt3[0x7c]}
+                          W = {0xf8, 0x7c, 0x7c, 0x84}
+                          W = 0x847c7cf8 <<<
+
+    Example 2 - Table 3, input byte 0xc9
+
+      Substitution:       0xc9 -> 0xdd
+
+      Creating mix word:  W = {0xdd, glt3[0xdd], glt2[0xdd], 0xdd}
+                          W = {0xdd, 0x7c, 0xa1, 0xdd}
+                          W = 0xdda17cdd <<<
+
+
+  Note, that since Galois Multiplication by 1 is used, there are plain (no mix)
+  substitution values contained in all encryption tables - this fact is used in
+  last encryption round.
+
+--- AddRoundKey ----------------------------------------------------------------
+
+  We XOR resulting word from previous operations with a key shedule and store
+  it back in the state.
+*)
 For j := 1 to (fNr - 1) do
   begin
     TempState := State;
     For i := 0 to Pred(fNb) do
-      State[i] := EncTab1[Byte(TempState[RoundIdx(fNb,i,ShiftRowOffsets[fNb,0])])] xor
-                  EncTab2[Byte(TempState[RoundIdx(fNb,i,ShiftRowOffsets[fNb,1])] shr 8)] xor
-                  EncTab3[Byte(TempState[RoundIdx(fNb,i,ShiftRowOffsets[fNb,2])] shr 16)] xor
-                  EncTab4[Byte(TempState[RoundIdx(fNb,i,ShiftRowOffsets[fNb,3])] shr 24)] xor
+      State[i] := EncTab1[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,0])])] xor
+                  EncTab2[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,1])] shr 8)] xor
+                  EncTab3[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,2])] shr 16)] xor
+                  EncTab4[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,3])] shr 24)] xor
                   fKeySchedule[j * fNb + i];
   end;
+(*
+  We again switch order of SubByte and ShiftRows (ShiftRows is done first,
+  SubBytes second).
+
+  ShiftRows is implemented the same way as in main round - instead of actual
+  shifting, we carefully select from which state word to take indexing byte for
+  a table lookup.
+
+  SubBytes is primitive table lookup operation, table index is byte selected in
+  ShiftRows.
+  As mentioned earlier, some tables used in main round contain plain
+  substitution values - so instead of declaring separate substitution table, we
+  can use this fact (EncTab4 is used since its words contain subtitution values
+  in their lowest byte).
+  The resulting 32bit word is then cunstructed by concatenation of substitued
+  bytes.
+
+  AddRoundKey is again a simple XOR operation.
+*)
 For i := 0 to Pred(fNb) do
-  TempState[i] := (EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,0])])] and $FF) xor
-                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,1])] shr 8)] and $FF) shl 8) xor
-                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,2])] shr 16)] and $FF) shl 16) xor
-                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,3])] shr 24)] and $FF) shl 24) xor
+  TempState[i] := (EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,0])])] and $FF) or
+                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,1])] shr 8)] and $FF) shl 8) or
+                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,2])] shr 16)] and $FF) shl 16) or
+                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,3])] shr 24)] and $FF) shl 24) xor
                   fKeySchedule[fNr * fNb + i];
 Move(TempState,Output,fBlockBytes);
 end;
 
 //------------------------------------------------------------------------------
 
+(*
+  Complete pseudocode of block decryption (equivalent inverse cipher).
+  Source: FIPS 197.
+
+ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+  EqInvCipher(byte in[4*Nb], byte out[4*Nb], word dw[Nb*(Nr+1)])
+  begin
+    byte state[4,Nb]
+
+    state = in
+
+    AddRoundKey(state, dw[Nr*Nb, (Nr+1)*Nb-1])
+
+    for round = Nr-1 step -1 downto 1
+      InvSubBytes(state)
+      InvShiftRows(state)
+      InvMixColumns(state)
+      AddRoundKey(state, dw[round*Nb, (round+1)*Nb-1])
+    end for
+
+    InvSubBytes(state)
+    InvShiftRows(state)
+    AddRoundKey(state, dw[0, Nb-1])
+
+    out = state
+  end
+
+ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+*)
 procedure TRijndaelCipher.Decrypt(const Input; out Output);
 var
   i,j:        Integer;
@@ -1360,23 +1495,140 @@ var
   end;
 
 begin
+(*
+  AddRoundKey is simple XOR of words from inpuf block with key shedule words.
+*)
 For i := 0 to Pred(fNb) do
   State[i] := TRijState(Input)[i] xor fKeySchedule[fNr * fNb + i];
+(*
+  InvSubBytes and InvShiftRows are again switched so InvShiftRows is done first.
+  InvSubBytes and InvMixColumns are then merged into one operation and done
+  using decryption lookup tables.
+
+--- InvShiftRows ---------------------------------------------------------------
+
+  InvShiftRows is implemented the same way as in the case of encryption -
+  instead of actual shifting, we select proper word from which to extract
+  indexing byte for further processing.
+  Only difference is, that inverse shifting moves bytes to a higher places (up):
+
+    InvShiftRows(w{a0,a1,a2,a3}) = w{a3,a0,a1,a2}
+
+  So when selecting the word, instead of adding row shift offset, we substract
+  it.
+
+  For example, let's say we have this state:
+
+      w0 | w1 | w2 | w3 | w4 | w5
+     -----------------------------
+      a0 | b0 | c0 | d0 | e0 | f0
+      a1 | b1 | c1 | d1 | e1 | f1 - rotate by 1
+      a2 | b2 | c2 | d2 | e2 | f2 - rotate by 2
+      a3 | b3 | c3 | d3 | e3 | f3
+
+  We want to select fourth word (w3) in a 6-word state above, we do it this way:
+
+    W = {byte #0 of w[3 - first row offset], byte #1 of w[3 - second row offset],
+         byte #2 of w[3 - third row offset], byte #3 of w[3 - fourth row offset]}
+
+           first row offset = 0  second row offset = 1
+           third row offset = 2  fourth row offset = 0
+
+    W = {byte #0 of w3, byte #1 of w2, byte #2 of w1, byte #3 of w3}
+
+    W = {d0, c1, b2, d3} <<<
+
+--- InvSubBytes + InvMixColumns ------------------------------------------------
+
+  These two operations are again meged together and done using lookup tables the
+  same way as encryption.
+
+  InvSubBytes is simple substitution.
+
+  InvMixColumns is very complex operation, but can be written for individual
+  bytes this way:
+
+    b0 = glt14[a0] xor glt11[a1] xor glt13[a2] xor glt9[a3]
+    b1 = glt9[a0] xor glt14[a1] xor glt11[a2] xor glt13[a3]
+    b2 = glt13[a0] xor glt9[a1] xor glt14[a2] xor glt11[a3]
+    b3 = glt11[a0] xor glt13[a1] xor glt9[a2] xor glt14[a3]
+
+  a0..a3 are individual bytes of the input 32bit word, b0..b3 are corresponding
+  bytes in the resulting 32bit word. gltX is Galois Multiplication lookup table
+  for a X multiplier.
+
+  We can again create set of lookup tables of precalculated words.
+  These decryption tables are constructed this way (i is index in the table):
+
+    Table 1:  W1[i] = {glt14[invsub(i)],glt9[invsub(i)],glt13[invsub(i)],glt11[invsub(i)]}
+    Table 2:  W2[i] = {glt11[invsub(i)],glt14[invsub(i)],glt9[invsub(i)],glt13[invsub(i)]}
+    Table 3:  W3[i] = {glt13[invsub(i)],glt11[invsub(i)],glt14[invsub(i)],glt9[invsub(i)]}
+    Table 4:  W4[i] = {glt9[invsub(i)],glt13[invsub(i)],glt11[invsub(i)],glt14[invsub(i)]}
+
+  And the resulting word is obtained by XORing all four words from the tables
+  that we obtain by indexing them with corresponding bytes word returned by
+  InvShiftRows function:
+
+    Rw = W1[a0] xor W2[a1] xor W3[a2] xor W4[a3]
+
+
+  Examples of lookup table word construction:
+
+    Example 1 - Table 2, input byte 0x07
+
+      Substitution:       0x07 -> 0x38
+
+      Creating mix word:  W = [glt11(0x38), glt14(0x38), glt9(0x38), glt13(0x38)]
+                          W = [0x93, 0x4b, 0xe3, 0x03]
+                          W = 0x03e34b93 <<<
+
+    Example 2 - Table 4, input byte 0x5a
+
+      Substitution:       0x5a -> 0x46
+
+      Creating mix word:  W = [glt9(0x46), glt13(0x46), glt11(0x46), glt14(0x46)]
+                          W = [0x40, 0x43, 0xcc, 0x89]
+                          W = 0x89cc4340 <<<
+
+
+  Note that since Galois Multiplication by 1 is NOT used this time, there are no
+  plain substitution values in any table.
+
+--- AddRoundKey ----------------------------------------------------------------
+
+  We XOR resulting word from previous operations with a key shedule and store
+  it back in the state.  
+*)
 For j := (fNr - 1) downto 1 do
   begin
     TempState := State;
     For i := 0 to Pred(fNb) do
-      State[i] := DecTab1[Byte(TempState[RoundIdx(fNb,i,ShiftRowOffsets[fNb,0])])] xor
-                  DecTab2[Byte(TempState[RoundIdx(fNb,i,ShiftRowOffsets[fNb,1])] shr 8)] xor
-                  DecTab3[Byte(TempState[RoundIdx(fNb,i,ShiftRowOffsets[fNb,2])] shr 16)] xor
-                  DecTab4[Byte(TempState[RoundIdx(fNb,i,ShiftRowOffsets[fNb,3])] shr 24)] xor
+      State[i] := DecTab1[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,0])])] xor
+                  DecTab2[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,1])] shr 8)] xor
+                  DecTab3[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,2])] shr 16)] xor
+                  DecTab4[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,3])] shr 24)] xor
                   fKeySchedule[j * fNb + i];
   end;
+(*
+  Order of InvSubByte and InvShiftRows is swithed (InvShiftRows is done first,
+  InvSubBytes second).
+
+  InvShiftRows is implemented the same way as in main round - refer there for
+  details.
+
+  SubBytes is lookup operation, table index is byte selected in ShiftRows.
+  Unlike in ecryption, decryption tables do not contain plain substitution
+  values, so we must declare separate inverse substitution table (InvSub).
+  The resulting 32bit word is then cunstructed by concatenation of substitued
+  bytes.
+
+  AddRoundKey is simple XOR operation.
+*)
 For i := 0 to Pred(fNb) do
-  TempState[i] := InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,0])])] xor
-                 (InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,1])] shr 8)] shl 8) xor
-                 (InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,2])] shr 16)] shl 16) xor
-                 (InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowOffsets[fNb,3])] shr 24)] shl 24) xor
+  TempState[i] := TRijWord(InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,0])])]) or
+                 (TRijWord(InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,1])] shr 8)]) shl 8) or
+                 (TRijWord(InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,2])] shr 16)]) shl 16) or
+                 (TRijWord(InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,3])] shr 24)]) shl 24) xor
                   fKeySchedule[i];
 Move(TempState,Output,fBlockBytes);
 end;
