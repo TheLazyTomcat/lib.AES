@@ -1,5 +1,9 @@
 unit AES;
 
+{$IFDEF ENDIAN_BIG}
+  {$MESSAGE FATAL 'Big-endian system not supported'}
+{$ENDIF}
+
 {$IFOPT Q+}
   {$DEFINE OverflowCheck}
 {$ENDIF}
@@ -82,15 +86,14 @@ type
 
 //******************************************************************************
 
-//  For decryption, an Equivalent Inverse Cipher is used.
-
   TRijLength  = (r128bit,r160bit,r192bit,r224bit,r256bit);
 
   TRijWord = UInt32;
   PRijWord = ^TRijWord;
 
-  TRijKeySchedule = array[0..119] of TRijWord;
-  TRijState       = array[0..7] of TRijWord;   {256 bits}
+  TRijKeySchedule  = array[0..119] of TRijWord;
+  TRijState        = array[0..7] of TRijWord;   {256 bits}
+  TRijShiftRowsOff = array[0..3] of Integer;
 
   TRijndaelCipher = class(TBlockCipher)
   private
@@ -100,6 +103,7 @@ type
     fNb:          Integer;    // length of the block in words (also number of columns in state)
     fNr:          Integer;    // number of rounds (function of Nk an Nb)
     fKeySchedule: TRijKeySchedule;
+    fRowShiftOff: TRijShiftRowsOff;
   protected
     procedure SetKeyLength(Value: TRijLength); virtual;
     procedure SetBlockLength(Value: TRijLength); virtual;
@@ -737,7 +741,8 @@ end;
   following tables are created.
 }
 const
-  // Encryption lookup tables
+{-- Encryption lookup tables --------------------------------------------------}
+
   EncTab1: array[Byte] of TRijWord = (
     $A56363C6, $847C7CF8, $997777EE, $8D7B7BF6, $0DF2F2FF, $BD6B6BD6, $B16F6FDE, $54C5C591,
     $50303060, $03010102, $A96767CE, $7D2B2B56, $19FEFEE7, $62D7D7B5, $E6ABAB4D, $9A7676EC,
@@ -874,7 +879,8 @@ const
     $038F8C8C, $59F8A1A1, $09808989, $1A170D0D, $65DABFBF, $D731E6E6, $84C64242, $D0B86868,
     $82C34141, $29B09999, $5A772D2D, $1E110F0F, $7BCBB0B0, $A8FC5454, $6DD6BBBB, $2C3A1616);
 
-  // Decryption lookup tables  
+{-- Decryption lookup tables --------------------------------------------------}
+
   DecTab1: array[Byte] of TRijWord = (
     $50A7F451, $5365417E, $C3A4171A, $965E273A, $CB6BAB3B, $F1459D1F, $AB58FAAC, $9303E34B,
     $55FA3020, $F66D76AD, $9176CC88, $254C02F5, $FCD7E54F, $D7CB2AC5, $80443526, $8FA362B5,
@@ -1012,11 +1018,9 @@ const
     $397101A8, $08DEB30C, $D89CE4B4, $6490C156, $7B6184CB, $D570B632, $48745C6C, $D04257B8);
 
   // Round constants
-  RCon: array[1..29] of TRijWord = (
-    $00000001, $00000002, $00000004, $00000008, $00000010, $00000020, $00000040, $00000080,
-    $0000001B, $00000036, $0000006c, $000000d8, $000000ab, $0000004d, $0000009a, $0000002f,
-    $0000005e, $000000bc, $00000063, $000000c6, $00000097, $00000035, $0000006a, $000000d4,
-    $000000b3, $0000007d, $000000fa, $000000ef, $000000c5);
+  RCon: array[1..29] of Byte = (
+    $01, $02, $04, $08, $10, $20, $40, $80, $1B, $36, $6c, $d8, $ab, $4d, $9a, $2f,
+    $5e, $bc, $63, $c6, $97, $35, $6a, $d4, $b3, $7d, $fa, $ef, $c5);
 
   // Inverse substitution table
   InvSub: array[Byte] of Byte = (
@@ -1037,7 +1041,7 @@ const
     $A0, $E0, $3B, $4D, $AE, $2A, $F5, $B0, $C8, $EB, $BB, $3C, $83, $53, $99, $61,
     $17, $2B, $04, $7E, $BA, $77, $D6, $26, $E1, $69, $14, $63, $55, $21, $0C, $7D);
 
-  ShiftRowsOffset: array[4..8,0..3] of Integer = (
+  ShiftRowsOffsets: array[4..8] of TRijShiftRowsOff = (
     (0,1,2,3),(0,1,2,3),(0,1,2,3),(0,1,2,4),(0,1,3,4));
 
 //******************************************************************************
@@ -1074,6 +1078,7 @@ else
 end;
 fNr := Max(fNk,fNb) + 6;
 fBlockBytes := fNb * SizeOf(TRijWord);
+fRowShiftOff := ShiftRowsOffsets[fNb];
 end;
 
 //------------------------------------------------------------------------------
@@ -1155,7 +1160,7 @@ For i := fNk to Pred(fNb * (fNr + 1)) do
       Temp := (EncTab4[Byte(Temp shr 8)] and $FF) or
              ((EncTab4[Byte(Temp shr 16)] and $FF) shl 8) or
              ((EncTab4[Byte(Temp shr 24)] and $FF) shl 16) or
-              (EncTab4[Byte(Temp)] shl 24) xor RCon[i div fNk]
+              (EncTab4[Byte(Temp)] shl 24) xor TRijWord(RCon[i div fNk])
     else If (fNk > 6) and (i mod fNk = 4) then
       Temp := (EncTab4[Byte(Temp)] and $FF) or
              ((EncTab4[Byte(Temp shr 8)] and $FF) shl 8) or
@@ -1260,12 +1265,11 @@ var
   State:      TRijState;
   TempState:  TRijState;
 
-  {$message 'remove rsize param, take value from fNb'}
-  Function RoundIdx(RSize,Start,Off: Integer): Integer;
+  Function RoundIdx(Start,Off: Integer): Integer;
   begin
     Result := Start + Off;
-    while Result >= RSize do
-      Dec(Result,RSize);  
+    while Result >= fNb do
+      Dec(Result,fNb);
   end;
 
 begin
@@ -1415,10 +1419,10 @@ For j := 1 to (fNr - 1) do
   begin
     TempState := State;
     For i := 0 to Pred(fNb) do
-      State[i] := EncTab1[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,0])])] xor
-                  EncTab2[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,1])] shr 8)] xor
-                  EncTab3[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,2])] shr 16)] xor
-                  EncTab4[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,3])] shr 24)] xor
+      State[i] := EncTab1[Byte(TempState[RoundIdx(i,fRowShiftOff[0])])] xor
+                  EncTab2[Byte(TempState[RoundIdx(i,fRowShiftOff[1])] shr 8)] xor
+                  EncTab3[Byte(TempState[RoundIdx(i,fRowShiftOff[2])] shr 16)] xor
+                  EncTab4[Byte(TempState[RoundIdx(i,fRowShiftOff[3])] shr 24)] xor
                   fKeySchedule[j * fNb + i];
   end;
 (*
@@ -1441,10 +1445,10 @@ For j := 1 to (fNr - 1) do
   AddRoundKey is again a simple XOR operation.
 *)
 For i := 0 to Pred(fNb) do
-  TempState[i] := (EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,0])])] and $FF) or
-                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,1])] shr 8)] and $FF) shl 8) or
-                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,2])] shr 16)] and $FF) shl 16) or
-                 ((EncTab4[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,3])] shr 24)] and $FF) shl 24) xor
+  TempState[i] := (EncTab4[Byte(State[RoundIdx(i,fRowShiftOff[0])])] and $FF) or
+                 ((EncTab4[Byte(State[RoundIdx(i,fRowShiftOff[1])] shr 8)] and $FF) shl 8) or
+                 ((EncTab4[Byte(State[RoundIdx(i,fRowShiftOff[2])] shr 16)] and $FF) shl 16) or
+                 ((EncTab4[Byte(State[RoundIdx(i,fRowShiftOff[3])] shr 24)] and $FF) shl 24) xor
                   fKeySchedule[fNr * fNb + i];
 Move(TempState,Output,fBlockBytes);
 end;
@@ -1487,11 +1491,11 @@ var
   State:      TRijState;
   TempState:  TRijState;
 
-  Function RoundIdx(RSize,Start,Off: Integer): Integer;
+  Function RoundIdx(Start,Off: Integer): Integer;
   begin
     Result := Start - Off;
     while Result < 0 do
-      Inc(Result,RSize);  
+      Inc(Result,fNb);
   end;
 
 begin
@@ -1603,10 +1607,10 @@ For j := (fNr - 1) downto 1 do
   begin
     TempState := State;
     For i := 0 to Pred(fNb) do
-      State[i] := DecTab1[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,0])])] xor
-                  DecTab2[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,1])] shr 8)] xor
-                  DecTab3[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,2])] shr 16)] xor
-                  DecTab4[Byte(TempState[RoundIdx(fNb,i,ShiftRowsOffset[fNb,3])] shr 24)] xor
+      State[i] := DecTab1[Byte(TempState[RoundIdx(i,fRowShiftOff[0])])] xor
+                  DecTab2[Byte(TempState[RoundIdx(i,fRowShiftOff[1])] shr 8)] xor
+                  DecTab3[Byte(TempState[RoundIdx(i,fRowShiftOff[2])] shr 16)] xor
+                  DecTab4[Byte(TempState[RoundIdx(i,fRowShiftOff[3])] shr 24)] xor
                   fKeySchedule[j * fNb + i];
   end;
 (*
@@ -1625,10 +1629,10 @@ For j := (fNr - 1) downto 1 do
   AddRoundKey is simple XOR operation.
 *)
 For i := 0 to Pred(fNb) do
-  TempState[i] := TRijWord(InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,0])])]) or
-                 (TRijWord(InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,1])] shr 8)]) shl 8) or
-                 (TRijWord(InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,2])] shr 16)]) shl 16) or
-                 (TRijWord(InvSub[Byte(State[RoundIdx(fNb,i,ShiftRowsOffset[fNb,3])] shr 24)]) shl 24) xor
+  TempState[i] := TRijWord(InvSub[Byte(State[RoundIdx(i,fRowShiftOff[0])])]) or
+                 (TRijWord(InvSub[Byte(State[RoundIdx(i,fRowShiftOff[1])] shr 8)]) shl 8) or
+                 (TRijWord(InvSub[Byte(State[RoundIdx(i,fRowShiftOff[2])] shr 16)]) shl 16) or
+                 (TRijWord(InvSub[Byte(State[RoundIdx(i,fRowShiftOff[3])] shr 24)]) shl 24) xor
                   fKeySchedule[i];
 Move(TempState,Output,fBlockBytes);
 end;
