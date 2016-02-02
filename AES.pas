@@ -8,6 +8,10 @@ unit AES;
   {$DEFINE OverflowCheck}
 {$ENDIF}
 
+{$IFDEF FPC}
+  {$MODE Delphi}
+{$ENDIF}
+
 interface
 
 uses
@@ -114,8 +118,8 @@ type
   public
     constructor Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
     constructor Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
-    procedure Init(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); override;
-    procedure Init(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); override;
+    procedure Init(const {%H-}Key; const {%H-}InitVector; {%H-}KeyBytes, {%H-}BlockBytes: TMemSize; {%H-}Mode: TBCMode); override;
+    procedure Init(const {%H-}Key; {%H-}KeyBytes, {%H-}BlockBytes: TMemSize; {%H-}Mode: TBCMode); override;
     procedure Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
     procedure Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
   published
@@ -158,14 +162,14 @@ var
 begin
 If fBlockBytes > 0 then
   For i := 0 to Pred(fBlockBytes) do
-    PByte(PtrUInt(@Dest) + i)^ := PByte(PtrUInt(@Src1) + i)^ xor PByte(PtrUInt(@Src2) + i)^;
+    {%H-}PByte({%H-}PtrUInt(@Dest) + i)^ := {%H-}PByte({%H-}PtrUInt(@Src1) + i)^ xor {%H-}PByte({%H-}PtrUInt(@Src2) + i)^;
 end;
 
 //------------------------------------------------------------------------------
 
 procedure TBlockCipher.BlocksCopy(const Src; out Dest);
 begin
-Move(Src,Dest,fBlockBytes);
+Move(Src,{%H-}Dest,fBlockBytes);
 end;
 
 //------------------------------------------------------------------------------
@@ -417,13 +421,13 @@ If InputSize > 0 then
     DoOnProgress(0.0);
     while BytesLeft >= fBlockBytes do
       begin
-        Update(Pointer(PtrUInt(@Input) + Offset)^,Pointer(PtrUInt(@Output) + Offset)^);
+        Update({%H-}Pointer({%H-}PtrUInt(@Input) + Offset)^,{%H-}Pointer({%H-}PtrUInt(@Output) + Offset)^);
         Dec(BytesLeft,fBlockBytes);
         Inc(Offset,fBlockBytes);
         DoOnProgress(BytesLeft / InputSize);
       end;
     If BytesLeft > 0 then
-      Final(Pointer(PtrUInt(@Input) + Offset)^,BytesLeft,Pointer(PtrUInt(@Output) + Offset)^);
+      Final({%H-}Pointer({%H-}PtrUInt(@Input) + Offset)^,BytesLeft,{%H-}Pointer({%H-}PtrUInt(@Output) + Offset)^);
     DoOnProgress(1.0);
   end;
 end;
@@ -1124,7 +1128,7 @@ begin
   further computations.
 *)
 For i := 0 to Pred(fNk) do
-  fKeySchedule[i] := PRijWord(PtrUInt(fKey) + PtrUInt(4 * i))^;
+  fKeySchedule[i] := {%H-}PRijWord({%H-}PtrUInt(fKey) + PtrUInt(4 * i))^;
 (*
   RotWord rotates bytes in input 32bit word one place up as this:
 
@@ -1435,7 +1439,7 @@ For i := 0 to Pred(fNb) do
                  ((EncTab4[Byte(State[RoundIdx(i,fRowShiftOff[2])] shr 16)] and $FF) shl 16) or
                  ((EncTab4[Byte(State[RoundIdx(i,fRowShiftOff[3])] shr 24)] and $FF) shl 24) xor
                   fKeySchedule[fNr * fNb + i];
-Move(TempState,Output,fBlockBytes);
+Move(TempState,{%H-}Output,fBlockBytes);
 end;
 
 //------------------------------------------------------------------------------
@@ -1619,7 +1623,7 @@ For i := 0 to Pred(fNb) do
                  (TRijWord(InvSub[Byte(State[RoundIdx(i,fRowShiftOff[2])] shr 16)]) shl 16) or
                  (TRijWord(InvSub[Byte(State[RoundIdx(i,fRowShiftOff[3])] shr 24)]) shl 24) xor
                   fKeySchedule[i];
-Move(TempState,Output,fBlockBytes);
+Move(TempState,{%H-}Output,fBlockBytes);
 end;
 
 //==============================================================================
