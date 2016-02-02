@@ -61,8 +61,8 @@ type
     procedure Init(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
     procedure Init(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
     procedure Update(const Input; out Output); virtual;
-    Function Final(const Input; InputSize: TMemSize; out Output; OutputFullBlock: Boolean = True): TMemSize; virtual;
-    Function OutputSize(InputSize: TMemSize; FullLastBlock: Boolean = True): TMemSize; virtual;
+    procedure Final(const Input; InputSize: TMemSize; out Output); virtual;
+    Function OutputSize(InputSize: TMemSize): TMemSize; virtual;
     procedure ProcessBytes(const Input; InputSize: TMemSize; out Output); overload; virtual;
     procedure ProcessBytes(var Buff; Size: TMemSize); overload; virtual;
     procedure ProcessStream(Input, Output: TStream); overload; virtual;
@@ -382,10 +382,10 @@ end;
 
 //------------------------------------------------------------------------------
 
-Function TBlockCipher.Final(const Input; InputSize: TMemSize; out Output; OutputFullBlock: Boolean = True): TMemSize;
+procedure TBlockCipher.Final(const Input; InputSize: TMemSize; out Output);
 begin
 If InputSize > fBlockBytes then
-  raise Exception.CreateFmt('TBlockCipher.Final:  Input buffer is too large (%d/%d).',[InputSize,fBlockBytes]);
+  raise Exception.CreateFmt('TBlockCipher.Final: Input buffer is too large (%d/%d).',[InputSize,fBlockBytes]);
 If InputSize < fBlockBytes then
   case fPadding of
     padPKCS7: FillChar(fTempBlock^,fBlockBytes,Byte(fBlockBytes - InputSize));
@@ -393,27 +393,14 @@ If InputSize < fBlockBytes then
    {padZeroes}FillChar(fTempBlock^,fBlockBytes,0);
   end;
 Move(Input,fTempBlock^,InputSize);
-If not OutputFullBlock and (fModeOfOperation in [moCFB,moOFB,moCTR]) then
-  begin
-    Update(fTempBlock^,fTempBlock^);
-    Move(fTempBlock^,Output,InputSize);
-    Result := InputSize;
-  end
-else
-  begin
-    Update(fTempBlock^,Output);
-    Result := fBlockBytes;
-  end;
+Update(fTempBlock^,Output);
 end;
 
 //------------------------------------------------------------------------------
 
-Function TBlockCipher.OutputSize(InputSize: TMemSize; FullLastBlock: Boolean = True): TMemSize;
+Function TBlockCipher.OutputSize(InputSize: TMemSize): TMemSize;
 begin
-If not FullLastBlock and (fModeOfOperation in [moCFB,moOFB,moCTR]) then
-  Result := InputSize
-else
-  Result := TMemSize(Ceil(InputSize / fBlockBytes)) * fBlockBytes;
+Result := TMemSize(Ceil(InputSize / fBlockBytes)) * fBlockBytes;
 end;
 
 //------------------------------------------------------------------------------
@@ -428,7 +415,7 @@ If InputSize > 0 then
     Offset := 0;
     BytesLeft := InputSize;
     DoOnProgress(0.0);
-    while BytesLeft > fBlockBytes do
+    while BytesLeft >= fBlockBytes do
       begin
         Update(Pointer(PtrUInt(@Input) + Offset)^,Pointer(PtrUInt(@Output) + Offset)^);
         Dec(BytesLeft,fBlockBytes);
@@ -471,10 +458,10 @@ else
             If BytesRead > 0 then
               begin
                 If BytesRead < fBlockBytes then
-                  BytesRead := Final(Buffer^,BytesRead,Buffer^)
+                  Final(Buffer^,BytesRead,Buffer^)
                 else
                   Update(Buffer^,Buffer^);
-                Output.WriteBuffer(Buffer^,BytesRead);
+                Output.WriteBuffer(Buffer^,fBlockBytes);
               end;
             DoOnProgress((Input.Position - ProgressStart) / (Input.Size - ProgressStart));
           until BytesRead < fBlockBytes;
@@ -507,11 +494,11 @@ If (Stream.Size - Stream.Position) > 0 then
         If BytesRead > 0 then
           begin
             If BytesRead < fBlockBytes then
-              BytesRead := Final(Buffer^,BytesRead,Buffer^)
+              Final(Buffer^,BytesRead,Buffer^)
             else
               Update(Buffer^,Buffer^);
             Stream.Position := BlockStart;
-            Stream.WriteBuffer(Buffer^,BytesRead);
+            Stream.WriteBuffer(Buffer^,fBlockBytes);
           end;
         DoOnProgress((Stream.Position - ProgressStart) / (Stream.Size - ProgressStart));
       until BytesRead < fBlockBytes;
@@ -1126,8 +1113,8 @@ end;
 *)
 procedure TRijndaelCipher.CipherInit;
 var
-  i,j:    Integer;
-  Temp:   TRijWord;
+  i:    Integer;
+  Temp: TRijWord;
 begin
 (*
   Key words are simply copied into lower Nk words of key shedule.
@@ -1211,13 +1198,11 @@ For i := fNk to Pred(fNb * (fNr + 1)) do
     mKSw = W1[sub(KSw0)] xor W2[sub(KSw1)] xor W3[sub(KSw2)] xor W4[sub(KSw3)]
 *)
 If fMode = cmDecrypt then
-{$message 'merge cycles'}
-  For i := 1 to Pred(fNr) do
-    For j := (i * fNb) to ((i + 1) * fNb - 1) do
-      fKeySchedule[j] := DecTab1[Byte(EncTab4[Byte(fKeySchedule[j])])] xor
-                         DecTab2[Byte(EncTab4[Byte(fKeySchedule[j] shr 8)])] xor
-                         DecTab3[Byte(EncTab4[Byte(fKeySchedule[j] shr 16)])] xor
-                         DecTab4[Byte(EncTab4[Byte(fKeySchedule[j] shr 24)])];
+  For i := fNb to Pred(fNr * fNb) do
+      fKeySchedule[i] := DecTab1[Byte(EncTab4[Byte(fKeySchedule[i])])] xor
+                         DecTab2[Byte(EncTab4[Byte(fKeySchedule[i] shr 8)])] xor
+                         DecTab3[Byte(EncTab4[Byte(fKeySchedule[i] shr 16)])] xor
+                         DecTab4[Byte(EncTab4[Byte(fKeySchedule[i] shr 24)])];
 end;
 
 //------------------------------------------------------------------------------
