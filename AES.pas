@@ -133,6 +133,20 @@ type
     property Nk: Integer read fNk;
     property Nb: Integer read fNb;
     property Nr: Integer read fNr;
+  end;
+
+
+//******************************************************************************
+
+  TAESCipher = class(TRijndaelCipher)
+  protected
+    procedure SetKeyLength(Value: TRijLength); override;
+    procedure SetBlockLength(Value: TRijLength); override;
+  public
+    constructor Create(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode); overload;
+    constructor Create(const Key; KeyLength: TRijLength; Mode: TBCMode); overload;
+    procedure Init(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
+    procedure Init(const Key; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
   end;  
 
 implementation
@@ -1698,5 +1712,52 @@ SetBlockLength(BlockLength);
 inherited Initialize(Key,KeyBytes,BlockBytes,Mode);
 end;
 
+//******************************************************************************
+
+procedure TAESCipher.SetKeyLength(Value: TRijLength);
+begin
+If Value in [r128bit,r192bit,r256bit] then
+  inherited SetKeyLength(Value)
+else
+  raise Exception.CreateFmt('TAESCipher.SetKeyLength: Unsupported key length (%d).',[Ord(Value)]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.SetBlockLength(Value: TRijLength);
+begin
+If Value = r128bit then
+  inherited SetBlockLength(Value)
+else
+  raise Exception.CreateFmt('TAESCipher.SetBlockLength: Unsupported block length (%d).',[Ord(Value)]);
+end;
+
+//==============================================================================
+
+constructor TAESCipher.Create(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode);
+begin
+Create(Key,InitVector,KeyLength,r128bit,Mode);
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+constructor TAESCipher.Create(const Key; KeyLength: TRijLength; Mode: TBCMode);
+begin
+Create(Key,KeyLength,r128bit,Mode);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.Init(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode);
+begin
+Init(Key,InitVector,KeyLength,r128bit,Mode);
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+procedure TAESCipher.Init(const Key; KeyLength: TRijLength; Mode: TBCMode);
+begin
+Init(Key,KeyLength,r128bit,Mode);
+end;
 
 end.
