@@ -18,6 +18,20 @@ uses
   Classes,
   AuxTypes;
 
+{==============================================================================}
+{------------------------------------------------------------------------------}
+{                                 TBlockCipher                                 }
+{------------------------------------------------------------------------------}
+{==============================================================================}
+
+{==============================================================================}
+{   TBlockCipher - declaration                                                 }
+{==============================================================================}
+{
+  TBlockCipher serves as a base class for all block ciphers - it will be moved
+  to a separate unit in the future.
+}
+
 const
   BlocksPerStreamBuffer = 1024;
 
@@ -93,7 +107,15 @@ type
     property OnProgress: TProgressEvent read fOnProgress write fOnProgress;
   end;
 
-//******************************************************************************
+{==============================================================================}
+{------------------------------------------------------------------------------}
+{                               TRijndaelCipher                                }
+{------------------------------------------------------------------------------}
+{==============================================================================}
+
+{==============================================================================}
+{   TRijndaelCipher - declaration                                              }
+{==============================================================================}
 
 type
   TRijLength  = (r128bit,r160bit,r192bit,r224bit,r256bit);
@@ -123,8 +145,8 @@ type
     procedure Encrypt(const Input; out Output); override;
     procedure Decrypt(const Input; out Output); override;
   public
-    constructor Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
-    constructor Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
+    constructor Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
+    constructor Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
     procedure Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
     procedure Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
   published
@@ -135,24 +157,49 @@ type
     property Nr: Integer read fNr;
   end;
 
+{==============================================================================}
+{------------------------------------------------------------------------------}
+{                                  TAESCipher                                  }
+{------------------------------------------------------------------------------}
+{==============================================================================}
 
-//******************************************************************************
+{==============================================================================}
+{   TAESCipher - declaration                                                   }
+{==============================================================================}
 
   TAESCipher = class(TRijndaelCipher)
   protected
     procedure SetKeyLength(Value: TRijLength); override;
     procedure SetBlockLength(Value: TRijLength); override;
   public
-    constructor Create(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode); overload;
-    constructor Create(const Key; KeyLength: TRijLength; Mode: TBCMode); overload;
+    constructor Create(const Key; const InitVector; KeyLength, {%H-}BlockLength: TRijLength; Mode: TBCMode); overload; override;
+    constructor Create(const Key; KeyLength, {%H-}BlockLength: TRijLength; Mode: TBCMode); overload; override;
+    constructor Create(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
+    constructor Create(const Key; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
+    procedure Init(const Key; const InitVector; KeyLength, {%H-}BlockLength: TRijLength; Mode: TBCMode); overload; override;
+    procedure Init(const Key; KeyLength, {%H-}BlockLength: TRijLength; Mode: TBCMode); overload; override;    
     procedure Init(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
     procedure Init(const Key; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
-  end;  
+  end;
 
 implementation
 
 uses
   SysUtils, Math;
+
+{==============================================================================}
+{------------------------------------------------------------------------------}
+{                                 TBlockCipher                                 }
+{------------------------------------------------------------------------------}
+{==============================================================================}
+
+{==============================================================================}
+{   TBlockCipher - implementation                                              }
+{==============================================================================}
+
+{------------------------------------------------------------------------------}
+{   TBlokcCipher - private methods                                             }
+{------------------------------------------------------------------------------}
 
 Function TBlockCipher.GetInitVectorBits: TMemSize;
 begin
@@ -173,7 +220,9 @@ begin
 Result := TMemSize(fBlockBytes shl 3);
 end;
 
-//==============================================================================
+{------------------------------------------------------------------------------}
+{   TBlokcCipher - protected methods                                           }
+{------------------------------------------------------------------------------}
 
 procedure TBlockCipher.SetKeyBytes(Value: TMemSize);
 begin
@@ -391,7 +440,9 @@ If (KeyBytes > 0) and (BlockBytes > 0) then
 else raise Exception.CreateFmt('TBlockCipher.Init: Size of key (%d) and blocks (%d) must be larger than zero.',[KeyBytes, BlockBytes]);
 end;
 
-//==============================================================================
+{------------------------------------------------------------------------------}
+{   TBlokcCipher - public methods                                              }
+{------------------------------------------------------------------------------}
 
 constructor TBlockCipher.Create;
 begin
@@ -590,11 +641,22 @@ try
 finally
   FileStream.Free;
 end;
-end;  
+end;
+
 
 {==============================================================================}
-{    Rijndael cipher lookup tables                                             }
+{------------------------------------------------------------------------------}
+{                               TRijndaelCipher                                }
+{------------------------------------------------------------------------------}
 {==============================================================================}
+
+{==============================================================================}
+{   TRijndaelCipher - implementation                                           }
+{==============================================================================}
+
+{------------------------------------------------------------------------------}
+{   Rijndael cipher lookup tables                                              }
+{------------------------------------------------------------------------------}
 {
   Majority of calculations is replaced by following lookup tables.
   Also note that current imlementation is optimized for little endian systems,
@@ -1075,7 +1137,9 @@ const
   ShiftRowsOffsets: array[4..8] of TRijShiftRowsOff = (
     (0,1,2,3),(0,1,2,3),(0,1,2,3),(0,1,2,4),(0,1,3,4));
 
-//******************************************************************************
+{------------------------------------------------------------------------------}
+{   TRijndaelCipher - protected methods                                        }
+{------------------------------------------------------------------------------}
 
 procedure TRijndaelCipher.SetModeOfOperation(Value: TBCModeOfOperation);
 var
@@ -1678,7 +1742,9 @@ For i := 0 to Pred(fNb) do
 Move(TempState,{%H-}Output,BlockBytes);
 end;
 
-//==============================================================================
+{------------------------------------------------------------------------------}
+{   TRijndaelCipher - public methods                                           }
+{------------------------------------------------------------------------------}
 
 constructor TRijndaelCipher.Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
 begin
@@ -1712,7 +1778,20 @@ SetBlockLength(BlockLength);
 inherited Initialize(Key,KeyBytes,BlockBytes,Mode);
 end;
 
-//******************************************************************************
+
+{==============================================================================}
+{------------------------------------------------------------------------------}
+{                                  TAESCipher                                  }
+{------------------------------------------------------------------------------}
+{==============================================================================}
+
+{==============================================================================}
+{   TAESCipher - implementation                                                }
+{==============================================================================}
+
+{------------------------------------------------------------------------------}
+{   TAESCipher - protected methods                                             }
+{------------------------------------------------------------------------------}
 
 procedure TAESCipher.SetKeyLength(Value: TRijLength);
 begin
@@ -1732,32 +1811,62 @@ else
   raise Exception.CreateFmt('TAESCipher.SetBlockLength: Unsupported block length (%d).',[Ord(Value)]);
 end;
 
-//==============================================================================
+{------------------------------------------------------------------------------}
+{   TAESCipher - public methods                                                }
+{------------------------------------------------------------------------------}
+
+constructor TAESCipher.Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
+begin
+inherited Create(Key,InitVector,KeyLength,r128bit,Mode);
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+constructor TAESCipher.Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
+begin
+inherited Create(Key,KeyLength,r128bit,Mode);
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
 
 constructor TAESCipher.Create(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode);
 begin
-Create(Key,InitVector,KeyLength,r128bit,Mode);
+inherited Create(Key,InitVector,KeyLength,r128bit,Mode);
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
 
 constructor TAESCipher.Create(const Key; KeyLength: TRijLength; Mode: TBCMode);
 begin
-Create(Key,KeyLength,r128bit,Mode);
+inherited Create(Key,KeyLength,r128bit,Mode);
 end;
 
 //------------------------------------------------------------------------------
 
+procedure TAESCipher.Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
+begin
+inherited Init(Key,InitVector,KeyLength,r128bit,Mode);
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+procedure TAESCipher.Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
+begin
+inherited Init(Key,KeyLength,r128bit,Mode);
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
 procedure TAESCipher.Init(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode);
 begin
-Init(Key,InitVector,KeyLength,r128bit,Mode);
+inherited Init(Key,InitVector,KeyLength,r128bit,Mode);
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
 
 procedure TAESCipher.Init(const Key; KeyLength: TRijLength; Mode: TBCMode);
 begin
-Init(Key,KeyLength,r128bit,Mode);
-end;
+inherited Init(Key,KeyLength,r128bit,Mode);
+end;  
 
 end.
