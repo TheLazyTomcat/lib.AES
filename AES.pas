@@ -44,8 +44,10 @@ type
     fOnProgress:      TProgressEvent;
     Function GetInitVectorBits: TMemSize;
     Function GetKeyBits: TMemSize;
-    Function GetBlockBits: TMemSize;
+    Function GetBlockBits: TMemSize;  
   protected
+    procedure SetKeyBytes(Value: TMemSize); virtual;
+    procedure SetBlockBytes(Value: TMemSize); virtual;
     procedure SetModeOfOperation(Value: TBCModeOfOperation); virtual;
     procedure BlocksXOR(const Src1,Src2; out Dest); virtual;
     procedure BlocksCopy(const Src; out Dest); virtual;
@@ -62,13 +64,11 @@ type
     procedure CipherFinal; virtual; abstract;
     procedure Encrypt(const Input; out Output); virtual; abstract;
     procedure Decrypt(const Input; out Output); virtual; abstract;
+    procedure Initialize(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
+    procedure Initialize(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
   public
-    constructor Create(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
-    constructor Create(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
     constructor Create; overload; virtual;
     destructor Destroy; override;
-    procedure Init(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
-    procedure Init(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
     procedure Update(const Input; out Output); virtual;
     procedure Final(const Input; InputSize: TMemSize; out Output); virtual;
     Function OutputSize(InputSize: TMemSize): TMemSize; virtual;
@@ -95,6 +95,7 @@ type
 
 //******************************************************************************
 
+type
   TRijLength  = (r128bit,r160bit,r192bit,r224bit,r256bit);
 
   TRijWord = UInt32;
@@ -124,10 +125,8 @@ type
   public
     constructor Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
     constructor Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
-    procedure Init(const {%H-}Key; const {%H-}InitVector; {%H-}KeyBytes, {%H-}BlockBytes: TMemSize; {%H-}Mode: TBCMode); override;
-    procedure Init(const {%H-}Key; {%H-}KeyBytes, {%H-}BlockBytes: TMemSize; {%H-}Mode: TBCMode); override;
-    procedure Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
-    procedure Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
+    procedure Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
+    procedure Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
   published
     property KeyLength: TRijLength read fKeyLength;
     property BlockLength: TRijLength read fBlockLength;
@@ -161,6 +160,20 @@ Result := TMemSize(fBlockBytes shl 3);
 end;
 
 //==============================================================================
+
+procedure TBlockCipher.SetKeyBytes(Value: TMemSize);
+begin
+fKeyBytes := Value;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBlockCipher.SetBlockBytes(Value: TMemSize);
+begin
+fBlockBytes := Value;
+end;
+
+//------------------------------------------------------------------------------
 
 procedure TBlockCipher.SetModeOfOperation(Value: TBCModeOfOperation);
 begin
@@ -324,23 +337,47 @@ begin
 If Assigned(fOnProgress) then fOnProgress(Self,Progress);
 end;
 
+//------------------------------------------------------------------------------
+
+procedure TBlockCipher.Initialize(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
+begin
+If (KeyBytes > 0) and (BlockBytes > 0) then
+  begin
+    fMode := Mode;
+    ReallocMem(fKey,KeyBytes);
+    Move(Key,fKey^,KeyBytes);
+    fKeyBytes := KeyBytes;
+    ReallocMem(fInitVector,BlockBytes);
+    ReallocMem(fTempBlock,BlockBytes);
+    Move(InitVector,fInitVector^,BlockBytes);
+    fBlockBytes := BlockBytes;
+    PrepareUpdateProc;
+    CipherInit;
+  end
+else raise Exception.CreateFmt('TBlockCipher.Init: Size of key (%d) and blocks (%d) must be larger than zero.',[KeyBytes, BlockBytes]);
+end;
+
+//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+
+procedure TBlockCipher.Initialize(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
+begin
+If (KeyBytes > 0) and (BlockBytes > 0) then
+  begin
+    fMode := Mode;
+    ReallocMem(fKey,KeyBytes);
+    Move(Key,fKey^,KeyBytes);
+    fKeyBytes := KeyBytes;
+    ReallocMem(fInitVector,BlockBytes);
+    FillChar(fInitVector^,BlockBytes,0);
+    ReallocMem(fTempBlock,BlockBytes);
+    fBlockBytes := BlockBytes;
+    PrepareUpdateProc;
+    CipherInit;
+  end
+else raise Exception.CreateFmt('TBlockCipher.Init: Size of key (%d) and blocks (%d) must be larger than zero.',[KeyBytes, BlockBytes]);
+end;
+
 //==============================================================================
-
-constructor TBlockCipher.Create(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
-begin
-Create;
-Init(Key,InitVector,KeyBytes,BlockBytes,Mode);
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-constructor TBlockCipher.Create(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
-begin
-Create;
-Init(Key,KeyBytes,BlockBytes,Mode);
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
 
 constructor TBlockCipher.Create;
 begin
@@ -365,46 +402,6 @@ CipherFinal;
 If Assigned(fTempBlock) and (fBlockBytes > 0) then
   FreeMem(fTempBlock,fBlockBytes);
 inherited;  
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.Init(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
-begin
-If (KeyBytes > 0) and (BlockBytes > 0) then
-  begin
-    fMode := Mode;
-    ReallocMem(fKey,KeyBytes);
-    Move(Key,fKey^,KeyBytes);
-    fKeyBytes := KeyBytes;
-    ReallocMem(fInitVector,BlockBytes);
-    ReallocMem(fTempBlock,BlockBytes);
-    Move(InitVector,fInitVector^,BlockBytes);
-    fBlockBytes := BlockBytes;
-    PrepareUpdateProc;
-    CipherInit;
-  end
-else raise Exception.CreateFmt('TBlockCipher.Init: Size of key (%d) and blocks (%d) must be larger than zero.',[KeyBytes, BlockBytes]);
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-procedure TBlockCipher.Init(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
-begin
-If (KeyBytes > 0) and (BlockBytes > 0) then
-  begin
-    fMode := Mode;
-    ReallocMem(fKey,KeyBytes);
-    Move(Key,fKey^,KeyBytes);
-    fKeyBytes := KeyBytes;
-    ReallocMem(fInitVector,BlockBytes);
-    FillChar(fInitVector^,BlockBytes,0);
-    ReallocMem(fTempBlock,BlockBytes);
-    fBlockBytes := BlockBytes;
-    PrepareUpdateProc;
-    CipherInit;
-  end
-else raise Exception.CreateFmt('TBlockCipher.Init: Size of key (%d) and blocks (%d) must be larger than zero.',[KeyBytes, BlockBytes]);
 end;
 
 //------------------------------------------------------------------------------
@@ -579,7 +576,7 @@ try
 finally
   FileStream.Free;
 end;
-end;
+end;  
 
 {==============================================================================}
 {    Rijndael cipher lookup tables                                             }
@@ -1072,7 +1069,7 @@ var
 begin
 OldValue := ModeOfOperation;
 inherited SetModeOfOperation(Value);
-If (OldValue <> Value) and (Value in [moCFB,moOFB,moCTR]) and (fMode = cmDecrypt) then
+If (OldValue <> Value) and (Value in [moCFB,moOFB,moCTR]) and (Mode = cmDecrypt) then
   CipherInit;
 end;
 
@@ -1091,7 +1088,7 @@ else
   raise Exception.CreateFmt('TRijndaelCipher.SetKeyLength: Unsupported key length (%d).',[Ord(Value)]);
 end;
 fNr := Max(fNk,fNb) + 6;
-fKeyBytes := fNk * SizeOf(TRijWord);
+SetKeyBytes(fNk * SizeOf(TRijWord));
 end;
 
 //------------------------------------------------------------------------------
@@ -1109,7 +1106,7 @@ else
   raise Exception.CreateFmt('TRijndaelCipher.SetBlockLength: Unsupported block length (%d).',[Ord(Value)]);
 end;
 fNr := Max(fNk,fNb) + 6;
-fBlockBytes := fNb * SizeOf(TRijWord);
+SetBlockBytes(fNb * SizeOf(TRijWord));
 fRowShiftOff := ShiftRowsOffsets[fNb];
 end;
 
@@ -1169,7 +1166,7 @@ begin
   further computations.
 *)
 For i := 0 to Pred(fNk) do
-  fKeySchedule[i] := {%H-}PRijWord({%H-}PtrUInt(fKey) + PtrUInt(4 * i))^;
+  fKeySchedule[i] := {%H-}PRijWord({%H-}PtrUInt(Key) + PtrUInt(4 * i))^;
 (*
   RotWord rotates bytes in input 32bit word one place up as this:
 
@@ -1242,7 +1239,7 @@ For i := fNk to Pred(fNb * (fNr + 1)) do
 
     mKSw = W1[sub(KSw0)] xor W2[sub(KSw1)] xor W3[sub(KSw2)] xor W4[sub(KSw3)]
 *)
-If (fMode = cmDecrypt) and not (fModeOfOperation in [moCFB,moOFB,moCTR]) then
+If (Mode = cmDecrypt) and not (ModeOfOperation in [moCFB,moOFB,moCTR]) then
   For i := fNb to Pred(fNr * fNb) do
       fKeySchedule[i] := DecTab1[Byte(EncTab4[Byte(fKeySchedule[i])])] xor
                          DecTab2[Byte(EncTab4[Byte(fKeySchedule[i] shr 8)])] xor
@@ -1480,7 +1477,7 @@ For i := 0 to Pred(fNb) do
                  ((EncTab4[Byte(State[RoundIdx(i,fRowShiftOff[2])] shr 16)] and $FF) shl 16) or
                  ((EncTab4[Byte(State[RoundIdx(i,fRowShiftOff[3])] shr 24)] and $FF) shl 24) xor
                   fKeySchedule[fNr * fNb + i];
-Move(TempState,{%H-}Output,fBlockBytes);
+Move(TempState,{%H-}Output,BlockBytes);
 end;
 
 //------------------------------------------------------------------------------
@@ -1664,7 +1661,7 @@ For i := 0 to Pred(fNb) do
                  (TRijWord(InvSub[Byte(State[RoundIdx(i,fRowShiftOff[2])] shr 16)]) shl 16) or
                  (TRijWord(InvSub[Byte(State[RoundIdx(i,fRowShiftOff[3])] shr 24)]) shl 24) xor
                   fKeySchedule[i];
-Move(TempState,{%H-}Output,fBlockBytes);
+Move(TempState,{%H-}Output,BlockBytes);
 end;
 
 //==============================================================================
@@ -1685,25 +1682,11 @@ end;
 
 //------------------------------------------------------------------------------
 
-procedure TRijndaelCipher.Init(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
-begin
-raise Exception.Create('TRijndaelCipher.Init: Calling this method is not allowed.');
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-procedure TRijndaelCipher.Init(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
-begin
-raise Exception.Create('TRijndaelCipher.Init: Calling this method is not allowed.');
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
 procedure TRijndaelCipher.Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
 begin
 SetKeyLength(KeyLength);
 SetBlockLength(BlockLength);
-inherited Init(Key,InitVector,fKeyBytes,fBlockBytes,Mode);
+inherited Initialize(Key,InitVector,KeyBytes,BlockBytes,Mode);
 end;
 
 //   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
@@ -1712,7 +1695,7 @@ procedure TRijndaelCipher.Init(const Key; KeyLength, BlockLength: TRijLength; Mo
 begin
 SetKeyLength(KeyLength);
 SetBlockLength(BlockLength);
-inherited Init(Key,fKeyBytes,fBlockBytes,Mode);
+inherited Initialize(Key,KeyBytes,BlockBytes,Mode);
 end;
 
 
