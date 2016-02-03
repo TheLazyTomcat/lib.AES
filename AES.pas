@@ -18,6 +18,9 @@ uses
   Classes,
   AuxTypes;
 
+const
+  BlocksPerStreamBuffer = 1024;
+
 type
   TBCMode            = (cmUndefined,cmEncrypt,cmDecrypt);
   TBCModeOfOperation = (moECB,moCBC,moPCBC,moCFB,moOFB,moCTR);
@@ -43,6 +46,7 @@ type
     Function GetKeyBits: TMemSize;
     Function GetBlockBits: TMemSize;
   protected
+    procedure SetModeOfOperation(Value: TBCModeOfOperation); virtual;
     procedure BlocksXOR(const Src1,Src2; out Dest); virtual;
     procedure BlocksCopy(const Src; out Dest); virtual;
     procedure Update_ECB(const Input; out Output); virtual;
@@ -51,6 +55,7 @@ type
     procedure Update_CFB(const Input; out Output); virtual;
     procedure Update_OFB(const Input; out Output); virtual;
     procedure Update_CTR(const Input; out Output); virtual;
+    procedure ProcessBuffer(Buffer: Pointer; Size: TMemSize); virtual;
     procedure PrepareUpdateProc; virtual;
     procedure DoOnProgress(Progress: Single); virtual;
     procedure CipherInit; virtual; abstract;
@@ -77,7 +82,7 @@ type
     property Key: Pointer read fKey;
   published
     property Mode: TBCMode read fMode;
-    property ModeOfOperation: TBCModeOfOperation read fModeOfOperation write fModeOfOperation;
+    property ModeOfOperation: TBCModeOfOperation read fModeOfOperation write SetModeOfOperation;
     property Padding: TBCPadding read fPadding write fPadding;
     property InitVectorBytes: TMemSize read fInitVectorBytes;
     property InitVectorBits: TMemSize read GetInitVectorBits;
@@ -109,6 +114,7 @@ type
     fKeySchedule: TRijKeySchedule;
     fRowShiftOff: TRijShiftRowsOff;
   protected
+    procedure SetModeOfOperation(Value: TBCModeOfOperation); override;
     procedure SetKeyLength(Value: TRijLength); virtual;
     procedure SetBlockLength(Value: TRijLength); virtual;
     procedure CipherInit; override;
@@ -120,8 +126,8 @@ type
     constructor Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
     procedure Init(const {%H-}Key; const {%H-}InitVector; {%H-}KeyBytes, {%H-}BlockBytes: TMemSize; {%H-}Mode: TBCMode); override;
     procedure Init(const {%H-}Key; {%H-}KeyBytes, {%H-}BlockBytes: TMemSize; {%H-}Mode: TBCMode); override;
-    procedure Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
-    procedure Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
+    procedure Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
+    procedure Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload;
   published
     property KeyLength: TRijLength read fKeyLength;
     property BlockLength: TRijLength read fBlockLength;
@@ -155,6 +161,14 @@ Result := TMemSize(fBlockBytes shl 3);
 end;
 
 //==============================================================================
+
+procedure TBlockCipher.SetModeOfOperation(Value: TBCModeOfOperation);
+begin
+fModeOfOperation := Value;
+PrepareUpdateProc;
+end;
+
+//------------------------------------------------------------------------------
 
 procedure TBlockCipher.BlocksXOR(const Src1,Src2; out Dest);
 var
@@ -266,6 +280,25 @@ If BlockBytes >= 8 then
   {$IFDEF OverflowCheck}{$Q+}{$ENDIF}  
   end
 else raise Exception.CreateFmt('TBlockCipher.Update_CTR: Too small block (%d).',[fBlockBytes]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBlockCipher.ProcessBuffer(Buffer: Pointer; Size: TMemSize);
+var
+  i:        Integer;
+  WorkPtr:  Pointer;
+begin
+For i := 0 to Pred(Size div fBlockBytes) do
+  begin
+    WorkPtr := {%H-}Pointer({%H-}PtrUInt(Buffer) + PtrUInt(TMemSize(i) * fBlockBytes));
+    Update(WorkPtr^,WorkPtr^);
+  end;
+If (Size mod fBlockBytes) <> 0 then
+  begin
+    WorkPtr := {%H-}Pointer({%H-}PtrUInt(Buffer) + PtrUInt((Size div fBlockBytes) * fBlockBytes));
+    Final(WorkPtr^,Size mod fBlockBytes,WorkPtr^);
+  end;
 end;
 
 //------------------------------------------------------------------------------
@@ -443,6 +476,7 @@ end;
 
 procedure TBlockCipher.ProcessStream(Input, Output: TStream);
 var
+  BuffSize:       TMemSize;
   Buffer:         Pointer;
   BytesRead:      TMemSize;
   ProgressStart:  Int64;
@@ -453,25 +487,23 @@ else
   begin
     If (Input.Size - Input.Position) > 0 then
       begin
-        GetMem(Buffer,fBlockBytes);
+        BuffSize := fBlockBytes * BlocksPerStreamBuffer;
+        GetMem(Buffer,BuffSize);
         try
           DoOnProgress(0.0);
           ProgressStart := Input.Position;
           repeat
-            BytesRead := Input.Read(Buffer^,fBlockBytes);
+            BytesRead := Input.Read(Buffer^,BuffSize);
             If BytesRead > 0 then
               begin
-                If BytesRead < fBlockBytes then
-                  Final(Buffer^,BytesRead,Buffer^)
-                else
-                  Update(Buffer^,Buffer^);
-                Output.WriteBuffer(Buffer^,fBlockBytes);
+                ProcessBuffer(Buffer,BytesRead);
+                Output.WriteBuffer(Buffer^,TMemSize(Ceil(BytesRead / fBlockBytes)) * fBlockBytes);
               end;
             DoOnProgress((Input.Position - ProgressStart) / (Input.Size - ProgressStart));
-          until BytesRead < fBlockBytes;
+          until BytesRead < BuffSize;
           DoOnProgress(1.0);
         finally
-          FreeMem(Buffer,fBlockBytes);
+          FreeMem(Buffer,BuffSize);
         end;
       end;
   end;
@@ -481,34 +513,31 @@ end;
 
 procedure TBlockCipher.ProcessStream(Stream: TStream);
 var
+  BuffSize:       TMemSize;
   Buffer:         Pointer;
   BytesRead:      TMemSize;
-  BlockStart:     Int64;
   ProgressStart:  Int64;
 begin
 If (Stream.Size - Stream.Position) > 0 then
   begin
-    GetMem(Buffer,fBlockBytes);
+    BuffSize := fBlockBytes * BlocksPerStreamBuffer;
+    GetMem(Buffer,BuffSize);
     try
       DoOnProgress(0.0);
       ProgressStart := Stream.Position;
       repeat
-        BlockStart := Stream.Position;
-        BytesRead := Stream.Read(Buffer^,fBlockBytes);
+        BytesRead := Stream.Read(Buffer^,BuffSize);
         If BytesRead > 0 then
           begin
-            If BytesRead < fBlockBytes then
-              Final(Buffer^,BytesRead,Buffer^)
-            else
-              Update(Buffer^,Buffer^);
-            Stream.Position := BlockStart;
-            Stream.WriteBuffer(Buffer^,fBlockBytes);
+            ProcessBuffer(Buffer,BytesRead);
+            Stream.Seek(-BytesRead,soFromCurrent);
+            Stream.WriteBuffer(Buffer^,TMemSize(Ceil(BytesRead / fBlockBytes)) * fBlockBytes);
           end;
         DoOnProgress((Stream.Position - ProgressStart) / (Stream.Size - ProgressStart));
-      until BytesRead < fBlockBytes;
+      until BytesRead < BuffSize;
       DoOnProgress(1.0);
     finally
-      FreeMem(Buffer,fBlockBytes);
+      FreeMem(Buffer,BuffSize);
     end;
   end;
 end;
@@ -1037,6 +1066,18 @@ const
 
 //******************************************************************************
 
+procedure TRijndaelCipher.SetModeOfOperation(Value: TBCModeOfOperation);
+var
+  OldValue: TBCModeOfOperation;
+begin
+OldValue := ModeOfOperation;
+inherited SetModeOfOperation(Value);
+If (OldValue <> Value) and (Value in [moCFB,moOFB,moCTR]) and (fMode = cmDecrypt) then
+  CipherInit;
+end;
+
+//------------------------------------------------------------------------------
+
 procedure TRijndaelCipher.SetKeyLength(Value: TRijLength);
 begin
 fKeyLength := Value;
@@ -1201,7 +1242,7 @@ For i := fNk to Pred(fNb * (fNr + 1)) do
 
     mKSw = W1[sub(KSw0)] xor W2[sub(KSw1)] xor W3[sub(KSw2)] xor W4[sub(KSw3)]
 *)
-If fMode = cmDecrypt then
+If (fMode = cmDecrypt) and not (fModeOfOperation in [moCFB,moOFB,moCTR]) then
   For i := fNb to Pred(fNr * fNb) do
       fKeySchedule[i] := DecTab1[Byte(EncTab4[Byte(fKeySchedule[i])])] xor
                          DecTab2[Byte(EncTab4[Byte(fKeySchedule[i] shr 8)])] xor
