@@ -483,13 +483,14 @@ end;
 destructor TBlockCipher.Destroy;
 begin
 CipherFinal;
-If Assigned(fInitVector) and (fBlockBytes > 0) then
-  FreeMem(fInitVector,fBlockBytes);
+If fBlockBytes > 0 then
+  begin
+    If Assigned(fInitVector) then FreeMem(fInitVector,fBlockBytes);
+    If Assigned(fTempBlock) then FreeMem(fTempBlock,fBlockBytes);
+  end;
 If Assigned(fKey) and (fKeyBytes > 0) then
   FreeMem(fKey,fKeyBytes);
-If Assigned(fTempBlock) and (fBlockBytes > 0) then
-  FreeMem(fTempBlock,fBlockBytes);
-inherited;  
+inherited;
 end;
 
 //------------------------------------------------------------------------------
