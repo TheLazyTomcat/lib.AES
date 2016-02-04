@@ -9,9 +9,9 @@
 
   Rijndael/AES cipher
 
-  ©František Milt 2016-02-03
+  ©František Milt 2016-02-04
 
-  Version 1.0
+  Version 1.0.1
 
   All combinations of allowed key and block sizes are implemented and should be
   compatible with reference Rijndael cipher.
@@ -483,6 +483,10 @@ end;
 destructor TBlockCipher.Destroy;
 begin
 CipherFinal;
+If Assigned(fInitVector) and (fBlockBytes > 0) then
+  FreeMem(fInitVector,fBlockBytes);
+If Assigned(fKey) and (fKeyBytes > 0) then
+  FreeMem(fKey,fKeyBytes);
 If Assigned(fTempBlock) and (fBlockBytes > 0) then
   FreeMem(fTempBlock,fBlockBytes);
 inherited;  
