@@ -536,18 +536,18 @@ If InputSize < fBlockBytes then
         padANSIX923:  {ANSI X.923}
           begin
             FillChar(TempBlock^,fBlockBytes,0);
-            PByte(PtrUInt(TempBlock) + Pred(fBlockBytes))^ := Byte(fBlockBytes - InputSize);
+            {%H-}PByte({%H-}PtrUInt(TempBlock) + Pred(fBlockBytes))^ := Byte(fBlockBytes - InputSize);
           end;
         padISO10126:  {ISO 10126}
           begin
             Randomize;
             For i := InputSize to Pred(fBlockBytes) do
-              PByte(PtrUInt(TempBlock) + PtrUInt(i))^ := Byte(Random(256));
+              {%H-}PByte({%H-}PtrUInt(TempBlock) + PtrUInt(i))^ := Byte(Random(256));
           end;
         padISOIEC7816_4:  {ISO/IEC 7816-4}
           begin
             FillChar(TempBlock^,fBlockBytes,0);
-            PByte(PtrUInt(TempBlock) + PtrUInt(InputSize))^ := $80;
+            {%H-}PByte({%H-}PtrUInt(TempBlock) + PtrUInt(InputSize))^ := $80;
           end;
       else
         {padZeroes}
