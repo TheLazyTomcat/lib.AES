@@ -1613,7 +1613,7 @@ For i := 0 to Pred(fNb) do
 *)
 For j := 1 to (fNr - 1) do
   begin
-    TempState := State;
+    TempState := {%H-}State;
     For i := 0 to Pred(fNb) do
       State[i] := EncTab1[Byte(TempState[RoundIdx(i,fRowShiftOff[0])])] xor
                   EncTab2[Byte(TempState[RoundIdx(i,fRowShiftOff[1])] shr 8)] xor
@@ -1646,7 +1646,7 @@ For i := 0 to Pred(fNb) do
                  ((EncTab4[Byte(State[RoundIdx(i,fRowShiftOff[2])] shr 16)] and $FF) shl 16) or
                  ((EncTab4[Byte(State[RoundIdx(i,fRowShiftOff[3])] shr 24)] and $FF) shl 24) xor
                   fKeySchedule[fNr * fNb + i];
-Move(TempState,{%H-}Output,BlockBytes);
+Move({%H-}TempState,{%H-}Output,BlockBytes);
 end;
 
 //------------------------------------------------------------------------------
@@ -1801,7 +1801,7 @@ For i := 0 to Pred(fNb) do
 *)
 For j := (fNr - 1) downto 1 do
   begin
-    TempState := State;
+    TempState := {%H-}State;
     For i := 0 to Pred(fNb) do
       State[i] := DecTab1[Byte(TempState[RoundIdx(i,fRowShiftOff[0])])] xor
                   DecTab2[Byte(TempState[RoundIdx(i,fRowShiftOff[1])] shr 8)] xor
@@ -1830,7 +1830,7 @@ For i := 0 to Pred(fNb) do
                  (TRijWord(InvSub[Byte(State[RoundIdx(i,fRowShiftOff[2])] shr 16)]) shl 16) or
                  (TRijWord(InvSub[Byte(State[RoundIdx(i,fRowShiftOff[3])] shr 24)]) shl 24) xor
                   fKeySchedule[i];
-Move(TempState,{%H-}Output,BlockBytes);
+Move({%H-}TempState,{%H-}Output,BlockBytes);
 end;
 
 {------------------------------------------------------------------------------}
