@@ -9,9 +9,9 @@
 
   Rijndael/AES cipher
 
-  ©František Milt 2016-03-01
+  ©František Milt 2016-08-06
 
-  Version 1.0.2
+  Version 1.0.3
 
   All combinations of allowed key and block sizes are implemented and should be
   compatible with reference Rijndael cipher.
@@ -405,11 +405,12 @@ var
   i:        Integer;
   WorkPtr:  Pointer;
 begin
-For i := 0 to Pred(Size div fBlockBytes) do
-  begin
-    WorkPtr := {%H-}Pointer({%H-}PtrUInt(Buffer) + PtrUInt(TMemSize(i) * fBlockBytes));
-    Update(WorkPtr^,WorkPtr^);
-  end;
+If Size >= fBlockBytes then
+  For i := 0 to Pred(Size div fBlockBytes) do
+    begin
+      WorkPtr := {%H-}Pointer({%H-}PtrUInt(Buffer) + PtrUInt(TMemSize(i) * fBlockBytes));
+      Update(WorkPtr^,WorkPtr^);
+    end;
 If (Size mod fBlockBytes) <> 0 then
   begin
     WorkPtr := {%H-}Pointer({%H-}PtrUInt(Buffer) + PtrUInt((Size div fBlockBytes) * fBlockBytes));
