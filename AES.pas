@@ -16,6 +16,9 @@
   All combinations of allowed key and block sizes are implemented and should be
   compatible with reference Rijndael cipher.
 
+  Dependencies:
+    AuxTypes - github.com/ncs-sniper/Lib.AuxTypes
+
 ===============================================================================}
 unit AES;
 
