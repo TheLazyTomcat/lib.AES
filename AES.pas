@@ -9,15 +9,16 @@
 
   Rijndael/AES cipher
 
-  ©František Milt 2016-08-06
+  ©František Milt 2017-07-17
 
-  Version 1.0.3
+  Version 1.0.4
 
   All combinations of allowed key and block sizes are implemented and should be
   compatible with reference Rijndael cipher.
 
   Dependencies:
     AuxTypes - github.com/ncs-sniper/Lib.AuxTypes
+    StrRect  - github.com/ncs-sniper/Lib.StrRect
 
 ===============================================================================}
 unit AES;
@@ -32,9 +33,9 @@ unit AES;
 
 {$IFDEF FPC}
   {$MODE Delphi}
-  // Activate symbol BARE_FPC if you want to compile this unit outside of Lazarus.
-  {.$DEFINE BARE_FPC}
 {$ENDIF}
+
+{$TYPEINFO ON}
 
 interface
 
@@ -211,14 +212,7 @@ type
 implementation
 
 uses
-  SysUtils, Math
-  {$IF Defined(FPC) and not Defined(Unicode) and not Defined(BARE_FPC)}
-  (*
-    If compiler throws error that LazUTF8 unit cannot be found, you have to
-    add LazUtils to required packages (Project > Project Inspector).
-  *)
-  , LazUTF8
-  {$IFEND};
+  SysUtils, Math, StrRect;
 
 {==============================================================================}
 {------------------------------------------------------------------------------}
@@ -672,7 +666,7 @@ If (Stream.Size - Stream.Position) > 0 then
         If BytesRead > 0 then
           begin
             ProcessBuffer(Buffer,BytesRead);
-            Stream.Seek(-BytesRead,soFromCurrent);
+            Stream.Seek(-Int64(BytesRead),soCurrent);
             Stream.WriteBuffer(Buffer^,TMemSize(Ceil(BytesRead / fBlockBytes)) * fBlockBytes);
           end;
         DoOnProgress((Stream.Position - ProgressStart) / (Stream.Size - ProgressStart));
@@ -695,17 +689,9 @@ If AnsiSameText(InputFileName,OutputFileName) then
   ProcessFile(InputFileName)
 else
   begin
-  {$IF Defined(FPC) and not Defined(Unicode) and not Defined(BARE_FPC)}
-    InputStream := TFileStream.Create(UTF8ToSys(InputFileName),fmOpenRead or fmShareDenyWrite);
-  {$ELSE}
-    InputStream := TFileStream.Create(InputFileName,fmOpenRead or fmShareDenyWrite);
-  {$IFEND}
+    InputStream := TFileStream.Create(StrToRTL(InputFileName),fmOpenRead or fmShareDenyWrite);
     try
-    {$IF Defined(FPC) and not Defined(Unicode) and not Defined(BARE_FPC)}
-      OutputStream := TFileStream.Create(UTF8ToSys(OutputFileName),fmCreate or fmShareExclusive);
-    {$ELSE}
-      OutputStream := TFileStream.Create(OutputFileName,fmCreate or fmShareExclusive);
-    {$IFEND}
+      OutputStream := TFileStream.Create(StrToRTL(OutputFileName),fmCreate or fmShareExclusive);
       try
         ProcessStream(InputStream,OutputStream);
       finally
@@ -723,11 +709,7 @@ procedure TBlockCipher.ProcessFile(const FileName: String);
 var
   FileStream: TFileStream;
 begin
-{$IF Defined(FPC) and not Defined(Unicode) and not Defined(BARE_FPC)}
-FileStream := TFileStream.Create(UTF8ToSys(FileName),fmOpenReadWrite or fmShareExclusive);
-{$ELSE}
-FileStream := TFileStream.Create(FileName,fmOpenReadWrite or fmShareExclusive);
-{$IFEND}
+FileStream := TFileStream.Create(StrToRTL(FileName),fmOpenReadWrite or fmShareExclusive);
 try
   ProcessStream(FileStream);
 finally
