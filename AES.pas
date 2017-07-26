@@ -131,11 +131,11 @@ type
     procedure Update_CTR(const Input; out Output); virtual;
     procedure ProcessBuffer(Buffer: Pointer; Size: TMemSize); virtual;
     procedure PrepareUpdateProc; virtual;
-    procedure DoOnProgress(Progress: Single); virtual;
+    procedure DoProgress(Progress: Single); virtual;
     procedure CipherInit; virtual; abstract;
     procedure CipherFinal; virtual; abstract;
-    procedure Encrypt(const Input; out Output); virtual; abstract;
-    procedure Decrypt(const Input; out Output); virtual; abstract;
+    procedure CipherEncrypt(const Input; out Output); virtual; abstract;
+    procedure CipherDecrypt(const Input; out Output); virtual; abstract;
     procedure Initialize(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
     procedure Initialize(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
   public
@@ -150,6 +150,10 @@ type
     procedure ProcessStream(Stream: TStream); overload; virtual;
     procedure ProcessFile(const InputFileName, OutputFileName: String); overload; virtual;
     procedure ProcessFile(const FileName: String); overload; virtual;
+    procedure ProcessAnsiString(const InputStr: AnsiString; var OutputStr: AnsiString); overload; virtual;
+    procedure ProcessAnsiString(var Str: AnsiString); overload; virtual;
+    procedure ProcessWideString(const InputStr: UnicodeString; var OutputStr: UnicodeString); overload; virtual;
+    procedure ProcessWideString(var Str: UnicodeString); overload; virtual;
     procedure ProcessString(const InputStr: String; var OutputStr: String); overload; virtual;
     procedure ProcessString(var Str: String); overload; virtual;
     property InitVector: Pointer read fInitVector;
@@ -202,8 +206,8 @@ type
     procedure SetBlockLength(Value: TRijLength); virtual;
     procedure CipherInit; override;
     procedure CipherFinal; override;
-    procedure Encrypt(const Input; out Output); override;
-    procedure Decrypt(const Input; out Output); override;
+    procedure CipherEncrypt(const Input; out Output); override;
+    procedure CipherDecrypt(const Input; out Output); override;
   public
     constructor Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
     constructor Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
@@ -262,8 +266,8 @@ type
     fKeySchedulePtr:  Pointer;
   protected
     procedure CipherInit; override;
-    procedure Encrypt(const Input; out Output); override;
-    procedure Decrypt(const Input; out Output); override;
+    procedure CipherEncrypt(const Input; out Output); override;
+    procedure CipherDecrypt(const Input; out Output); override;
   public
     class Function AccelerationSupported: Boolean; override;
   end;
@@ -376,8 +380,10 @@ end;
 procedure TBlockCipher.Update_ECB(const Input; out Output);
 begin
 case fMode of
-  cmEncrypt:  Encrypt(Input,Output);
-  cmDecrypt:  Decrypt(Input,Output);
+  cmEncrypt:  CipherEncrypt(Input,Output);
+  cmDecrypt:  CipherDecrypt(Input,Output);
+else
+  raise Exception.CreateFmt('TBlockCipher.Update_ECB: Invalid mode (%d).',[Ord(fMode)]);
 end;
 end;
 
@@ -389,16 +395,18 @@ case fMode of
   cmEncrypt:
     begin
       BlocksXOR(Input,fInitVector^,fTempBlock^);
-      Encrypt(fTempBlock^,Output);
+      CipherEncrypt(fTempBlock^,Output);
       BlocksCopy(Output,fInitVector^);
     end;
   cmDecrypt:
     begin
       BlocksCopy(Input,fTempBlock^);
-      Decrypt(Input,Output);
+      CipherDecrypt(Input,Output);
       BlocksXOR(Output,fInitVector^,Output);
       BlocksCopy(fTempBlock^,fInitVector^);
     end;
+else
+  raise Exception.CreateFmt('TBlockCipher.Update_CBC: Invalid mode (%d).',[Ord(fMode)]);
 end;
 end;
 
@@ -411,16 +419,18 @@ case fMode of
     begin
       BlocksXOR(Input,fInitVector^,fTempBlock^);
       BlocksCopy(Input,fInitVector^);
-      Encrypt(fTempBlock^,Output);
+      CipherEncrypt(fTempBlock^,Output);
       BlocksXOR(Output,fInitVector^,fInitVector^);
     end;
   cmDecrypt:
     begin
-      Decrypt(Input,fTempBlock^);
+      CipherDecrypt(Input,fTempBlock^);
       BlocksXOR(fTempBlock^,fInitVector^,fTempBlock^);
       BlocksXOR(Input,fTempBlock^,fInitVector^);
       BlocksCopy(fTempBlock^,Output);
     end;
+else
+  raise Exception.CreateFmt('TBlockCipher.Update_PCBC: Invalid mode (%d).',[Ord(fMode)]);
 end;
 end;
 
@@ -431,16 +441,18 @@ begin
 case fMode of
   cmEncrypt:
     begin
-      Encrypt(fInitVector^,fTempBlock^);
+      CipherEncrypt(fInitVector^,fTempBlock^);
       BlocksXOR(fTempBlock^,Input,Output);
       BlocksCopy(Output,fInitVector^);
     end;
   cmDecrypt:
     begin
-      Encrypt(fInitVector^,fTempBlock^);
+      CipherEncrypt(fInitVector^,fTempBlock^);
       BlocksCopy(Input,fInitVector^);
       BlocksXOR(fTempBlock^,Input,Output);
     end;
+else
+  raise Exception.CreateFmt('TBlockCipher.Update_CFB: Invalid mode (%d).',[Ord(fMode)]);
 end;
 end;
 
@@ -448,7 +460,7 @@ end;
 
 procedure TBlockCipher.Update_OFB(const Input; out Output);
 begin
-Encrypt(fInitVector^,fInitVector^);
+CipherEncrypt(fInitVector^,fInitVector^);
 BlocksXOR(Input,fInitVector^,Output);
 end;
 
@@ -458,13 +470,13 @@ procedure TBlockCipher.Update_CTR(const Input; out Output);
 begin
 If BlockBytes >= 8 then
   begin
-    Encrypt(fInitVector^,fTempBlock^);
+    CipherEncrypt(fInitVector^,fTempBlock^);
     BlocksXOR(Input,fTempBlock^,Output);
   {$IFDEF OverflowChecks}{$Q-}{$ENDIF}
     Int64(fInitVector^) := Int64(fInitVector^) + 1;
   {$IFDEF OverflowChecks}{$Q+}{$ENDIF}
   end
-else raise Exception.CreateFmt('TBlockCipher.Update_CTR: Too small block (%d), cannot use CTB.',[fBlockBytes]);
+else raise Exception.CreateFmt('TBlockCipher.Update_CTR: Too small block (%d), cannot use CTR.',[fBlockBytes]);
 end;
 
 //------------------------------------------------------------------------------
@@ -505,7 +517,7 @@ end;
 
 //------------------------------------------------------------------------------
 
-procedure TBlockCipher.DoOnProgress(Progress: Single);
+procedure TBlockCipher.DoProgress(Progress: Single);
 begin
 If Assigned(fOnProgress) then fOnProgress(Self,Progress);
 end;
@@ -576,8 +588,10 @@ begin
 CipherFinal;
 If fBlockBytes > 0 then
   begin
-    If Assigned(fInitVector) then FreeMem(fInitVector,fBlockBytes);
-    If Assigned(fTempBlock) then FreeMem(fTempBlock,fBlockBytes);
+    If Assigned(fInitVector) then
+      FreeMem(fInitVector,fBlockBytes);
+    If Assigned(fTempBlock) then
+      FreeMem(fTempBlock,fBlockBytes);
   end;
 If Assigned(fKey) and (fKeyBytes > 0) then
   FreeMem(fKey,fKeyBytes);
@@ -601,42 +615,44 @@ var
   i:          Integer;
   TempBlock:  Pointer;
 begin
-If InputSize > fBlockBytes then
-  raise Exception.CreateFmt('TBlockCipher.Final: Input buffer is too large (%d/%d).',[InputSize,fBlockBytes]);
-If InputSize < fBlockBytes then
+If InputSize <= fBlockBytes then
   begin
-    GetMem(TempBlock,fBlockBytes);
-    try
-      case fPadding of
-        padPKCS7:     {PKCS#7}
-          FillChar(TempBlock^,fBlockBytes,Byte(fBlockBytes - InputSize));
-        padANSIX923:  {ANSI X.923}
-          begin
+    If InputSize < fBlockBytes then
+      begin
+        GetMem(TempBlock,fBlockBytes);
+        try
+          case fPadding of
+            padPKCS7:     {PKCS#7}
+              FillChar(TempBlock^,fBlockBytes,Byte(fBlockBytes - InputSize));
+            padANSIX923:  {ANSI X.923}
+              begin
+                FillChar(TempBlock^,fBlockBytes,0);
+                {%H-}PByte({%H-}PtrUInt(TempBlock) + Pred(fBlockBytes))^ := Byte(fBlockBytes - InputSize);
+              end;
+            padISO10126:  {ISO 10126}
+              begin
+              Randomize;
+                For i := InputSize to Pred(fBlockBytes) do
+                  {%H-}PByte({%H-}PtrUInt(TempBlock) + PtrUInt(i))^ := Byte(Random(256));
+              end;
+            padISOIEC7816_4:  {ISO/IEC 7816-4}
+              begin
+                FillChar(TempBlock^,fBlockBytes,0);
+                {%H-}PByte({%H-}PtrUInt(TempBlock) + PtrUInt(InputSize))^ := $80;
+              end;
+          else
+            {padZeroes}
             FillChar(TempBlock^,fBlockBytes,0);
-            {%H-}PByte({%H-}PtrUInt(TempBlock) + Pred(fBlockBytes))^ := Byte(fBlockBytes - InputSize);
           end;
-        padISO10126:  {ISO 10126}
-          begin
-            Randomize;
-            For i := InputSize to Pred(fBlockBytes) do
-              {%H-}PByte({%H-}PtrUInt(TempBlock) + PtrUInt(i))^ := Byte(Random(256));
-          end;
-        padISOIEC7816_4:  {ISO/IEC 7816-4}
-          begin
-            FillChar(TempBlock^,fBlockBytes,0);
-            {%H-}PByte({%H-}PtrUInt(TempBlock) + PtrUInt(InputSize))^ := $80;
-          end;
-      else
-        {padZeroes}
-        FillChar(TempBlock^,fBlockBytes,0);
-      end;
-      Move(Input,TempBlock^,InputSize);
-      Update(TempBlock^,Output);
-    finally
-      FreeMem(TempBlock,fBlockBytes);
-    end;
+          Move(Input,TempBlock^,InputSize);
+          Update(TempBlock^,Output);
+        finally
+          FreeMem(TempBlock,fBlockBytes);
+        end;
+      end
+    else Update(Input,Output);
   end
-else Update(Input,Output);
+else raise Exception.CreateFmt('TBlockCipher.Final: Input buffer is too large (%d/%d).',[InputSize,fBlockBytes]);
 end;
 
 //------------------------------------------------------------------------------
@@ -657,17 +673,17 @@ If InputSize > 0 then
   begin
     Offset := 0;
     BytesLeft := InputSize;
-    DoOnProgress(0.0);
+    DoProgress(0.0);
     while BytesLeft >= fBlockBytes do
       begin
         Update({%H-}Pointer({%H-}PtrUInt(@Input) + Offset)^,{%H-}Pointer({%H-}PtrUInt(@Output) + Offset)^);
         Dec(BytesLeft,fBlockBytes);
         Inc(Offset,fBlockBytes);
-        DoOnProgress(BytesLeft / InputSize);
+        DoProgress(Offset / InputSize);
       end;
     If BytesLeft > 0 then
       Final({%H-}Pointer({%H-}PtrUInt(@Input) + Offset)^,BytesLeft,{%H-}Pointer({%H-}PtrUInt(@Output) + Offset)^);
-    DoOnProgress(1.0);
+    DoProgress(1.0);
   end;
 end;
 
@@ -696,7 +712,7 @@ else
         BuffSize := fBlockBytes * BlocksPerStreamBuffer;
         GetMem(Buffer,BuffSize);
         try
-          DoOnProgress(0.0);
+          DoProgress(0.0);
           ProgressStart := Input.Position;
           repeat
             BytesRead := Input.Read(Buffer^,BuffSize);
@@ -705,9 +721,9 @@ else
                 ProcessBuffer(Buffer,BytesRead);
                 Output.WriteBuffer(Buffer^,TMemSize(Ceil(BytesRead / fBlockBytes)) * fBlockBytes);
               end;
-            DoOnProgress((Input.Position - ProgressStart) / (Input.Size - ProgressStart));
+            DoProgress((Input.Position - ProgressStart) / (Input.Size - ProgressStart));
           until BytesRead < BuffSize;
-          DoOnProgress(1.0);
+          DoProgress(1.0);
         finally
           FreeMem(Buffer,BuffSize);
         end;
@@ -729,7 +745,7 @@ If (Stream.Size - Stream.Position) > 0 then
     BuffSize := fBlockBytes * BlocksPerStreamBuffer;
     GetMem(Buffer,BuffSize);
     try
-      DoOnProgress(0.0);
+      DoProgress(0.0);
       ProgressStart := Stream.Position;
       repeat
         BytesRead := Stream.Read(Buffer^,BuffSize);
@@ -739,9 +755,9 @@ If (Stream.Size - Stream.Position) > 0 then
             Stream.Seek(-Int64(BytesRead),soCurrent);
             Stream.WriteBuffer(Buffer^,TMemSize(Ceil(BytesRead / fBlockBytes)) * fBlockBytes);
           end;
-        DoOnProgress((Stream.Position - ProgressStart) / (Stream.Size - ProgressStart));
+        DoProgress((Stream.Position - ProgressStart) / (Stream.Size - ProgressStart));
       until BytesRead < BuffSize;
-      DoOnProgress(1.0);
+      DoProgress(1.0);
     finally
       FreeMem(Buffer,BuffSize);
     end;
@@ -785,6 +801,54 @@ try
 finally
   FileStream.Free;
 end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBlockCipher.ProcessAnsiString(const InputStr: AnsiString; var OutputStr: AnsiString);
+begin
+If PAnsiChar(InputStr) = PAnsiChar(OutputStr) then
+  ProcessAnsiString(OutputStr)
+else
+  begin
+    SetLength(OutputStr,Ceil(OutputSize(Length(InputStr) * SizeOf(AnsiChar)) / SizeOf(AnsiChar)));
+    ProcessBytes(PAnsiChar(InputStr)^,Length(InputStr) * SizeOf(AnsiChar),PAnsiChar(OutputStr)^);
+  end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBlockCipher.ProcessAnsiString(var Str: AnsiString);
+var
+  InLength: TStrSize;
+begin
+InLength := Length(Str);
+SetLength(Str,Ceil(OutputSize(InLength * SizeOf(AnsiChar)) / SizeOf(AnsiChar)));
+ProcessBytes(PAnsiChar(Str)^,InLength * SizeOf(AnsiChar));
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBlockCipher.ProcessWideString(const InputStr: UnicodeString; var OutputStr: UnicodeString);
+begin
+If PWideChar(InputStr) = PWideChar(OutputStr) then
+  ProcessWideString(OutputStr)
+else
+  begin
+    SetLength(OutputStr,Ceil(OutputSize(Length(InputStr) * SizeOf(WideChar)) / SizeOf(WideChar)));
+    ProcessBytes(PWideChar(InputStr)^,Length(InputStr) * SizeOf(WideChar),PWideChar(OutputStr)^);
+  end;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TBlockCipher.ProcessWideString(var Str: UnicodeString);
+var
+  InLength: TStrSize;
+begin
+InLength := Length(Str);
+SetLength(Str,Ceil(OutputSize(InLength * SizeOf(WideChar)) / SizeOf(WideChar)));
+ProcessBytes(PWideChar(Str)^,InLength * SizeOf(WideChar));
 end;
 
 //------------------------------------------------------------------------------
@@ -1532,7 +1596,7 @@ end;
 
  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 *)
-procedure TRijndaelCipher.Encrypt(const Input; out Output);
+procedure TRijndaelCipher.CipherEncrypt(const Input; out Output);
 var
   i,j:        Integer;
   State:      TRijState;
@@ -1758,7 +1822,7 @@ end;
 
  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 *)
-procedure TRijndaelCipher.Decrypt(const Input; out Output);
+procedure TRijndaelCipher.CipherDecrypt(const Input; out Output);
 var
   i,j:        Integer;
   State:      TRijState;
@@ -2044,8 +2108,6 @@ begin
 inherited Init(Key,KeyLength,r128bit,Mode);
 end;
 
-{$IFNDEF PurePascal}
-
 {==============================================================================}
 {------------------------------------------------------------------------------}
 {                            TAESCipherAccelerated                             }
@@ -2059,6 +2121,8 @@ end;
 {------------------------------------------------------------------------------}
 {   TAESCipherAccelerated - assembly implementation                            }
 {------------------------------------------------------------------------------}
+
+{$IFNDEF PurePascal}
 
 {$IFDEF ASMSuppressSizeWarnings}
   {$WARN 2087 OFF}  //  Supresses warnings on following $WARN
@@ -2425,22 +2489,22 @@ end;
 
 //------------------------------------------------------------------------------
 
-procedure TAESCipherAccelerated.Encrypt(const Input; out Output);
+procedure TAESCipherAccelerated.CipherEncrypt(const Input; out Output);
 begin
 If fAccelerated then
   AESNI_Encrypt(@Input,@Output,fKeySchedulePtr,UInt8(fNr))
 else
-  inherited Encrypt(Input,Output);
+  inherited CipherEncrypt(Input,Output);
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TAESCipherAccelerated.Decrypt(const Input; out Output);
+procedure TAESCipherAccelerated.CipherDecrypt(const Input; out Output);
 begin
 If fAccelerated then
   AESNI_Decrypt(@Input,@Output,fKeySchedulePtr,UInt8(fNr))
 else
-  inherited Decrypt(Input,Output);
+  inherited CipherDecrypt(Input,Output);
 end;
 
 {------------------------------------------------------------------------------}
