@@ -9,31 +9,64 @@
 
   Rijndael/AES cipher
 
-  ©František Milt 2017-07-17
+  ©František Milt 2017-07-26
 
-  Version 1.0.4
+  Version 1.1
 
   All combinations of allowed key and block sizes are implemented and should be
   compatible with reference Rijndael cipher.
 
   Dependencies:
-    AuxTypes - github.com/ncs-sniper/Lib.AuxTypes
-    StrRect  - github.com/ncs-sniper/Lib.StrRect
+    AuxTypes    - github.com/ncs-sniper/Lib.AuxTypes
+    StrRect     - github.com/ncs-sniper/Lib.StrRect
+  * SimpleCPUID - github.com/ncs-sniper/Lib.SimpleCPUID
+
+  SimpleCPUID is required only when PurePascal symbol is not defined.
 
 ===============================================================================}
 unit AES;
+
+{$IF defined(CPUX86_64) or defined(CPUX64)}
+  {$DEFINE x64}
+{$ELSEIF defined(CPU386)}
+  {$DEFINE x86}
+{$ELSE}
+  {$DEFINE PurePascal}
+{$IFEND}
+
+{$IF defined(CPU64) or defined(CPU64BITS)}
+  {$DEFINE 64bit}
+{$ELSEIF defined(CPU16)}
+  {$MESSAGE FATAL '16bit CPU not supported'}
+{$ELSE}
+  {$DEFINE 32bit}
+{$IFEND}
+
+{$IF Defined(WINDOWS) or Defined(MSWINDOWS)}
+  {$DEFINE Windows}
+{$IFEND}
 
 {$IFDEF ENDIAN_BIG}
   {$MESSAGE FATAL 'Big-endian system not supported'}
 {$ENDIF}
 
 {$IFOPT Q+}
-  {$DEFINE OverflowCheck}
+  {$DEFINE OverflowChecks}
 {$ENDIF}
 
 {$IFDEF FPC}
   {$MODE Delphi}
+  {$IFNDEF PurePascal}
+    {$ASMMODE Intel}
+    {$DEFINE ASMSuppressSizeWarnings}
+  {$ENDIF}
 {$ENDIF}
+
+{$IF not Defined(FPC) and not Defined(x64)}
+  {$DEFINE ASM_MachineCode}
+{$ELSE}
+  {$UNDEF ASM_MachineCode}
+{$IFEND}
 
 {$TYPEINFO ON}
 
@@ -66,7 +99,7 @@ type
   TBCPadding         = (padZeroes,padPKCS7,padANSIX923,padISO10126,padISOIEC7816_4);
 
   TBCUpdateProc = procedure(const Input; out Output) of object;
-  TProgressEvent = procedure(Sender: TObject; Progress: Single) of object;
+  TBCProgressEvent = procedure(Sender: TObject; Progress: Single) of object;
 
   TBlockCipher = class(TObject)
   private
@@ -80,7 +113,7 @@ type
     fTempBlock:       Pointer;
     fBlockBytes:      TMemSize;
     fUpdateProc:      TBCUpdateProc;
-    fOnProgress:      TProgressEvent;
+    fOnProgress:      TBCProgressEvent;
     Function GetInitVectorBits: TMemSize;
     Function GetKeyBits: TMemSize;
     Function GetBlockBits: TMemSize;  
@@ -131,7 +164,7 @@ type
     property KeyBits: TMemSize read GetKeyBits;
     property BlockBytes: TMemSize read fBlockBytes;
     property BlockBits: TMemSize read GetBlockBits;
-    property OnProgress: TProgressEvent read fOnProgress write fOnProgress;
+    property OnProgress: TBCProgressEvent read fOnProgress write fOnProgress;
   end;
 
 {==============================================================================}
@@ -152,7 +185,7 @@ type
 
   TRijKeySchedule  = array[0..119] of TRijWord;
   TRijState        = array[0..7] of TRijWord;   {256 bits}
-  TRijShiftRowsOff = array[0..3] of Integer;
+  TRijRowShiftOffs = array[0..3] of Integer;
 
   TRijndaelCipher = class(TBlockCipher)
   private
@@ -162,7 +195,7 @@ type
     fNb:          Integer;    // length of the block in words (also number of columns in state)
     fNr:          Integer;    // number of rounds (function of Nk an Nb)
     fKeySchedule: TRijKeySchedule;
-    fRowShiftOff: TRijShiftRowsOff;
+    fRowShiftOff: TRijRowShiftOffs;
   protected
     procedure SetModeOfOperation(Value: TBCModeOfOperation); override;
     procedure SetKeyLength(Value: TRijLength); virtual;
@@ -199,6 +232,7 @@ type
     procedure SetKeyLength(Value: TRijLength); override;
     procedure SetBlockLength(Value: TRijLength); override;
   public
+    class Function AccelerationSupported: Boolean; virtual;
     constructor Create(const Key; const InitVector; KeyLength, {%H-}BlockLength: TRijLength; Mode: TBCMode); overload; override;
     constructor Create(const Key; KeyLength, {%H-}BlockLength: TRijLength; Mode: TBCMode); overload; override;
     constructor Create(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
@@ -209,10 +243,36 @@ type
     procedure Init(const Key; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
   end;
 
+{==============================================================================}
+{------------------------------------------------------------------------------}
+{                            TAESCipherAccelerated                             }
+{------------------------------------------------------------------------------}
+{==============================================================================}
+
+{==============================================================================}
+{   TAESCipherAccelerated - declaration                                        }
+{==============================================================================}
+
+{$IFDEF PurePascal}
+  TAESCipherAccelerated = TAESCipher;
+{$ELSE}
+  TAESCipherAccelerated = class(TAESCipher)
+  private
+    fAccelerated:     Boolean;
+    fKeySchedulePtr:  Pointer;
+  protected
+    procedure CipherInit; override;
+    procedure Encrypt(const Input; out Output); override;
+    procedure Decrypt(const Input; out Output); override;
+  public
+    class Function AccelerationSupported: Boolean; override;
+  end;
+{$ENDIF}
+
 implementation
 
 uses
-  SysUtils, Math, StrRect;
+  SysUtils, Math, StrRect{$IFNDEF PurePascal}, SimpleCPUID{$ENDIF};
 
 {==============================================================================}
 {------------------------------------------------------------------------------}
@@ -278,20 +338,30 @@ var
   i:  PtrUInt;
 begin
 If fBlockBytes > 0 then
-  If fBlockBytes and 3 = 0 then
-    begin
-      For i := 0 to Pred(fBlockBytes shr 2) do
-        {%H-}PUInt32({%H-}PtrUInt(@Dest) + (i shl 2))^ :=
-          {%H-}PUInt32({%H-}PtrUInt(@Src1) + (i shl 2))^ xor
-          {%H-}PUInt32({%H-}PtrUInt(@Src2) + (i shl 2))^
-    end
-  else
-    begin
-      For i := 0 to Pred(fBlockBytes) do
-        {%H-}PByte({%H-}PtrUInt(@Dest) + i)^ :=
-          {%H-}PByte({%H-}PtrUInt(@Src1) + i)^ xor
-          {%H-}PByte({%H-}PtrUInt(@Src2) + i)^;
-    end;
+  begin
+  {$IFDEF 64bit}
+    If fBlockBytes and 7 = 0 then
+      begin
+        For i := 0 to Pred(fBlockBytes shr 3) do
+          {%H-}PUInt64({%H-}PtrUInt(@Dest) + (i shl 3))^ :=
+            {%H-}PUInt64({%H-}PtrUInt(@Src1) + (i shl 3))^ xor
+            {%H-}PUInt64({%H-}PtrUInt(@Src2) + (i shl 3))^
+      end
+    else{$ENDIF} If fBlockBytes and 3 = 0 then
+      begin
+        For i := 0 to Pred(fBlockBytes shr 2) do
+          {%H-}PUInt32({%H-}PtrUInt(@Dest) + (i shl 2))^ :=
+            {%H-}PUInt32({%H-}PtrUInt(@Src1) + (i shl 2))^ xor
+            {%H-}PUInt32({%H-}PtrUInt(@Src2) + (i shl 2))^
+      end
+    else
+      begin
+        For i := 0 to Pred(fBlockBytes) do
+          {%H-}PByte({%H-}PtrUInt(@Dest) + i)^ :=
+            {%H-}PByte({%H-}PtrUInt(@Src1) + i)^ xor
+            {%H-}PByte({%H-}PtrUInt(@Src2) + i)^;
+      end;
+  end;
 end;
 
 //------------------------------------------------------------------------------
@@ -390,11 +460,11 @@ If BlockBytes >= 8 then
   begin
     Encrypt(fInitVector^,fTempBlock^);
     BlocksXOR(Input,fTempBlock^,Output);
-  {$IFDEF OverflowCheck}{$Q-}{$ENDIF}
-    Inc(Int64(fInitVector^));
-  {$IFDEF OverflowCheck}{$Q+}{$ENDIF}  
+  {$IFDEF OverflowChecks}{$Q-}{$ENDIF}
+    Int64(fInitVector^) := Int64(fInitVector^) + 1;
+  {$IFDEF OverflowChecks}{$Q+}{$ENDIF}
   end
-else raise Exception.CreateFmt('TBlockCipher.Update_CTR: Too small block (%d).',[fBlockBytes]);
+else raise Exception.CreateFmt('TBlockCipher.Update_CTR: Too small block (%d), cannot use CTB.',[fBlockBytes]);
 end;
 
 //------------------------------------------------------------------------------
@@ -1232,7 +1302,7 @@ const
     $A0, $E0, $3B, $4D, $AE, $2A, $F5, $B0, $C8, $EB, $BB, $3C, $83, $53, $99, $61,
     $17, $2B, $04, $7E, $BA, $77, $D6, $26, $E1, $69, $14, $63, $55, $21, $0C, $7D);
 
-  ShiftRowsOffsets: array[4..8] of TRijShiftRowsOff = (
+  RowShiftOffsets: array[4..8] of TRijRowShiftOffs = (
     (0,1,2,3),(0,1,2,3),(0,1,2,3),(0,1,2,4),(0,1,3,4));
 
 {------------------------------------------------------------------------------}
@@ -1283,7 +1353,7 @@ else
 end;
 fNr := Max(fNk,fNb) + 6;
 SetBlockBytes(fNb * SizeOf(TRijWord));
-fRowShiftOff := ShiftRowsOffsets[fNb];
+fRowShiftOff := RowShiftOffsets[fNb];
 end;
 
 //------------------------------------------------------------------------------
@@ -1390,7 +1460,7 @@ For i := fNk to Pred(fNb * (fNr + 1)) do
     mKSw2 = glt13[KSw0] xor glt9[KSw1] xor glt14[KSw2] xor glt11[KSw3]
     mKSw3 = glt11[KSw0] xor glt13[KSw1] xor glt9[KSw2] xor glt14[KSw3]
 
-  ...and since decoding tables a constructed this way:
+  ...and since decoding tables are constructed this way:
 
     Table 1:  W1[i] = {glt14(invsub(i)),glt9(invsub(i)),glt13(invsub(i)),glt11(invsub(i))}
     Table 2:  W2[i] = {glt11(invsub(i)),glt14(invsub(i)),glt9(invsub(i)),glt13(invsub(i))}
@@ -1913,6 +1983,13 @@ end;
 {   TAESCipher - public methods                                                }
 {------------------------------------------------------------------------------}
 
+class Function TAESCipher.AccelerationSupported: Boolean;
+begin
+Result := False;
+end;
+
+//------------------------------------------------------------------------------
+
 constructor TAESCipher.Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
 begin
 inherited Create(Key,InitVector,KeyLength,r128bit,Mode);
@@ -1965,6 +2042,421 @@ end;
 procedure TAESCipher.Init(const Key; KeyLength: TRijLength; Mode: TBCMode);
 begin
 inherited Init(Key,KeyLength,r128bit,Mode);
-end;  
+end;
+
+{$IFNDEF PurePascal}
+
+{==============================================================================}
+{------------------------------------------------------------------------------}
+{                            TAESCipherAccelerated                             }
+{------------------------------------------------------------------------------}
+{==============================================================================}
+
+{==============================================================================}
+{   TAESCipherAccelerated - implementation                                     }
+{==============================================================================}
+
+{------------------------------------------------------------------------------}
+{   TAESCipherAccelerated - assembly implementation                            }
+{------------------------------------------------------------------------------}
+
+{$IFDEF ASMSuppressSizeWarnings}
+  {$WARN 2087 OFF}  //  Supresses warnings on following $WARN
+  {$WARN 7122 OFF}  //  Warning: Check size of memory operand "op: memory-operand-size is X bits, but expected [Y bits + Z byte offset]"
+{$ENDIF}
+
+procedure AESNI_KeyExpand_128(Key, KeySchedule: Pointer); register; assembler;
+asm
+    MOVUPS    XMM0, dqword ptr [Key]
+    MOVAPS    dqword ptr [KeySchedule], XMM0
+    MOVAPS    XMM1, XMM0
+
+{$DEFINE KeyExpand_128_RoundCommon}
+  {$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $3A, $DF, $C9, $01    //  AESKEYGENASSIST   XMM1, XMM1, $01
+    {$INCLUDE '.\AES_Assembly.inc'}
+    DB  $66, $0F, $3A, $DF, $C9, $02
+    {$INCLUDE '.\AES_Assembly.inc'}
+    DB  $66, $0F, $3A, $DF, $C9, $04
+    {$INCLUDE '.\AES_Assembly.inc'}
+    DB  $66, $0F, $3A, $DF, $C9, $08
+    {$INCLUDE '.\AES_Assembly.inc'}
+    DB  $66, $0F, $3A, $DF, $C9, $10
+    {$INCLUDE '.\AES_Assembly.inc'}
+    DB  $66, $0F, $3A, $DF, $C9, $20
+    {$INCLUDE '.\AES_Assembly.inc'}
+    DB  $66, $0F, $3A, $DF, $C9, $40
+    {$INCLUDE '.\AES_Assembly.inc'}
+    DB  $66, $0F, $3A, $DF, $C9, $80
+    {$INCLUDE '.\AES_Assembly.inc'}
+    DB  $66, $0F, $3A, $DF, $C9, $1B
+    {$INCLUDE '.\AES_Assembly.inc'}
+    DB  $66, $0F, $3A, $DF, $C9, $36
+    {$INCLUDE '.\AES_Assembly.inc'}
+  {$ELSE}
+    AESKEYGENASSIST   XMM1, XMM1, $01
+    {$INCLUDE '.\AES_Assembly.inc'}
+    AESKEYGENASSIST   XMM1, XMM1, $02
+    {$INCLUDE '.\AES_Assembly.inc'}
+    AESKEYGENASSIST   XMM1, XMM1, $04
+    {$INCLUDE '.\AES_Assembly.inc'}
+    AESKEYGENASSIST   XMM1, XMM1, $08
+    {$INCLUDE '.\AES_Assembly.inc'}
+    AESKEYGENASSIST   XMM1, XMM1, $10
+    {$INCLUDE '.\AES_Assembly.inc'}
+    AESKEYGENASSIST   XMM1, XMM1, $20
+    {$INCLUDE '.\AES_Assembly.inc'}
+    AESKEYGENASSIST   XMM1, XMM1, $40
+    {$INCLUDE '.\AES_Assembly.inc'}
+    AESKEYGENASSIST   XMM1, XMM1, $80
+    {$INCLUDE '.\AES_Assembly.inc'}
+    AESKEYGENASSIST   XMM1, XMM1, $1B
+    {$INCLUDE '.\AES_Assembly.inc'}
+    AESKEYGENASSIST   XMM1, XMM1, $36
+    {$INCLUDE '.\AES_Assembly.inc'}
+  {$ENDIF}
+{$UNDEF KeyExpand_128_RoundCommon}
+end;
+
+//------------------------------------------------------------------------------
+
+procedure AESNI_KeyExpand_192(Key, KeySchedule: Pointer); register; assembler;
+asm
+    MOVUPS    XMM0, dqword ptr [Key]
+    MOVAPS    dqword ptr [KeySchedule], XMM0
+    ADD       KeySchedule,  16
+
+    MOVLPS    XMM2, qword ptr [Key + 16]
+    MOVAPS    XMM1, XMM0
+    MOVAPS    XMM3, XMM2
+
+{$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $3A, $DF, $DB, $01
+  {$DEFINE KeyExpand_192_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_2}
+    DB  $66, $0F, $3A, $DF, $DB, $02
+  {$DEFINE KeyExpand_192_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_1}
+    DB  $66, $0F, $3A, $DF, $DB, $04
+  {$DEFINE KeyExpand_192_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_2}
+    DB  $66, $0F, $3A, $DF, $DB, $08
+  {$DEFINE KeyExpand_192_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_1}
+    DB  $66, $0F, $3A, $DF, $DB, $10
+  {$DEFINE KeyExpand_192_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_2}
+    DB  $66, $0F, $3A, $DF, $DB, $20
+  {$DEFINE KeyExpand_192_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_1}
+    DB  $66, $0F, $3A, $DF, $DB, $40
+  {$DEFINE KeyExpand_192_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_2}
+    DB  $66, $0F, $3A, $DF, $DB, $80
+  {$DEFINE KeyExpand_192_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_1}
+{$ELSE}
+    AESKEYGENASSIST   XMM3, XMM3, $01
+  {$DEFINE KeyExpand_192_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_2}
+    AESKEYGENASSIST   XMM3, XMM3, $02
+  {$DEFINE KeyExpand_192_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_1}
+    AESKEYGENASSIST   XMM3, XMM3, $04
+  {$DEFINE KeyExpand_192_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_2}
+    AESKEYGENASSIST   XMM3, XMM3, $08
+  {$DEFINE KeyExpand_192_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_1}
+    AESKEYGENASSIST   XMM3, XMM3, $10
+  {$DEFINE KeyExpand_192_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_2}
+    AESKEYGENASSIST   XMM3, XMM3, $20
+  {$DEFINE KeyExpand_192_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_1}
+    AESKEYGENASSIST   XMM3, XMM3, $40
+  {$DEFINE KeyExpand_192_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_2}
+    AESKEYGENASSIST   XMM3, XMM3, $80
+  {$DEFINE KeyExpand_192_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_192_RoundCommon_1}
+{$ENDIF}
+end;
+
+//------------------------------------------------------------------------------
+
+procedure AESNI_KeyExpand_256(Key, KeySchedule: Pointer); register; assembler;
+asm
+    MOVUPS    XMM0, dqword ptr [Key]
+    MOVUPS    XMM1, dqword ptr [Key + 16]
+    MOVAPS    dqword ptr [KeySchedule], XMM0
+    MOVAPS    dqword ptr [KeySchedule + 16], XMM1
+
+    MOVAPS    XMM2, XMM1
+    ADD       KeySchedule,  32
+
+{$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $3A, $DF, $D2, $01
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    DB  $66, $0F, $3A, $DF, $D2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    DB  $66, $0F, $3A, $DF, $D2, $02
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    DB  $66, $0F, $3A, $DF, $D2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    DB  $66, $0F, $3A, $DF, $D2, $04
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    DB  $66, $0F, $3A, $DF, $D2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    DB  $66, $0F, $3A, $DF, $D2, $08
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    DB  $66, $0F, $3A, $DF, $D2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    DB  $66, $0F, $3A, $DF, $D2, $10
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    DB  $66, $0F, $3A, $DF, $D2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    DB  $66, $0F, $3A, $DF, $D2, $20
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    DB  $66, $0F, $3A, $DF, $D2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    DB  $66, $0F, $3A, $DF, $D2, $40
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+{$ELSE}
+    AESKEYGENASSIST   XMM2, XMM2, $01
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    AESKEYGENASSIST   XMM2, XMM2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    AESKEYGENASSIST   XMM2, XMM2, $02
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    AESKEYGENASSIST   XMM2, XMM2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    AESKEYGENASSIST   XMM2, XMM2, $04
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    AESKEYGENASSIST   XMM2, XMM2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    AESKEYGENASSIST   XMM2, XMM2, $08
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    AESKEYGENASSIST   XMM2, XMM2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    AESKEYGENASSIST   XMM2, XMM2, $10
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    AESKEYGENASSIST   XMM2, XMM2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    AESKEYGENASSIST   XMM2, XMM2, $20
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+    AESKEYGENASSIST   XMM2, XMM2, $00
+  {$DEFINE KeyExpand_256_RoundCommon_2}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_2}
+    AESKEYGENASSIST   XMM2, XMM2, $40
+  {$DEFINE KeyExpand_256_RoundCommon_1}{$INCLUDE '.\AES_Assembly.inc'}{$UNDEF KeyExpand_256_RoundCommon_1}
+{$ENDIF}
+end;
+
+//==============================================================================
+
+procedure AESNI_KeyExpand_Dec(KeySchedule: Pointer; Repeats: UInt32); register; assembler;
+asm
+@Cycle:
+    ADD     KeySchedule,  16
+  {$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $38, $DB, $00   //  AESIMC  XMM0, dqword ptr [EAX]
+  {$ELSE}
+    AESIMC  XMM0, dqword ptr [KeySchedule]
+  {$ENDIF}
+    MOVAPS  dqword ptr [KeySchedule], XMM0
+
+    DEC     Repeats
+    JNZ     @Cycle
+end;
+
+//==============================================================================
+
+procedure AESNI_Encrypt(Input, Output, KeySchedule: Pointer; Rounds: UInt8); register; assembler;
+asm
+    // load input
+    MOVUPS      XMM0, dqword ptr [Input]
+    PXOR        XMM0, dqword ptr [KeySchedule]
+    ADD         KeySchedule,  16
+
+    // first 9 rounds
+  {$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $38, $DC, $01                     //  AESENC  XMM0, dqword ptr [ECX]
+    DB  $66, $0F, $38, $DC, $41, $10                //  AESENC  XMM0, dqword ptr [ECX + 16]
+    DB  $66, $0F, $38, $DC, $41, $20                //  AESENC  XMM0, dqword ptr [ECX + 32]
+    DB  $66, $0F, $38, $DC, $41, $30                //  AESENC  XMM0, dqword ptr [ECX + 48]
+    DB  $66, $0F, $38, $DC, $41, $40                //  AESENC  XMM0, dqword ptr [ECX + 64]
+    DB  $66, $0F, $38, $DC, $41, $50                //  AESENC  XMM0, dqword ptr [ECX + 80]
+    DB  $66, $0F, $38, $DC, $41, $60                //  AESENC  XMM0, dqword ptr [ECX + 96]
+    DB  $66, $0F, $38, $DC, $41, $70                //  AESENC  XMM0, dqword ptr [ECX + 112]
+    DB  $66, $0F, $38, $DC, $81, $80, $00, $00, $00 //  AESENC  XMM0, dqword ptr [ECX + 128]
+  {$ELSE}
+    AESENC      XMM0, dqword ptr [KeySchedule]
+    AESENC      XMM0, dqword ptr [KeySchedule + 16]
+    AESENC      XMM0, dqword ptr [KeySchedule + 32]
+    AESENC      XMM0, dqword ptr [KeySchedule + 48]
+    AESENC      XMM0, dqword ptr [KeySchedule + 64]
+    AESENC      XMM0, dqword ptr [KeySchedule + 80]
+    AESENC      XMM0, dqword ptr [KeySchedule + 96]
+    AESENC      XMM0, dqword ptr [KeySchedule + 112]
+    AESENC      XMM0, dqword ptr [KeySchedule + 128]
+  {$ENDIF}
+    ADD         KeySchedule,  144
+    CMP         Rounds,       10
+    JNA         @LastRound
+
+    // 12 rounds (192bit key)
+  {$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $38, $DC, $01       //  AESENC  XMM0, dqword ptr [ECX]
+    DB  $66, $0F, $38, $DC, $41, $10  //  AESENC  XMM0, dqword ptr [ECX + 16]
+  {$ELSE}
+    AESENC      XMM0, dqword ptr [KeySchedule]
+    AESENC      XMM0, dqword ptr [KeySchedule + 16]
+  {$ENDIF}
+    ADD         KeySchedule,  32
+    CMP         Rounds,       12
+    JNA         @LastRound
+
+    // 14 rounds (256bit key)
+  {$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $38, $DC, $01       //  AESENC  XMM0, dqword ptr [ECX]
+    DB  $66, $0F, $38, $DC, $41, $10  //  AESENC  XMM0, dqword ptr [ECX + 16]
+  {$ELSE}
+    AESENC      XMM0, dqword ptr [KeySchedule]
+    AESENC      XMM0, dqword ptr [KeySchedule + 16]
+  {$ENDIF}
+    ADD         KeySchedule,  32
+
+@LastRound:
+  {$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $38, $DD, $01       // AESENCLAST  XMM0, dqword ptr [ECX]
+  {$ELSE}
+    AESENCLAST  XMM0, dqword ptr [KeySchedule]
+  {$ENDIF}
+
+    // store output
+    MOVUPS      dqword ptr [Output],  XMM0
+end;
+
+//------------------------------------------------------------------------------
+
+procedure AESNI_Decrypt(Input, Output, KeySchedule: Pointer; Rounds: UInt8); register; assembler;
+asm
+    // load input
+    MOVUPS      XMM0, dqword ptr [Input]
+    PXOR        XMM0, dqword ptr [KeySchedule]
+
+    // first 9 rounds
+    SUB         KeySchedule,  144
+  {$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $38, $DE, $81, $80, $00, $00, $00 //  AESDEC  XMM0, dqword ptr [ECX + 128]
+    DB  $66, $0F, $38, $DE, $41, $70                //  AESDEC  XMM0, dqword ptr [ECX + 112]
+    DB  $66, $0F, $38, $DE, $41, $60                //  AESDEC  XMM0, dqword ptr [ECX + 96]
+    DB  $66, $0F, $38, $DE, $41, $50                //  AESDEC  XMM0, dqword ptr [ECX + 80]
+    DB  $66, $0F, $38, $DE, $41, $40                //  AESDEC  XMM0, dqword ptr [ECX + 64]
+    DB  $66, $0F, $38, $DE, $41, $30                //  AESDEC  XMM0, dqword ptr [ECX + 48]
+    DB  $66, $0F, $38, $DE, $41, $20                //  AESDEC  XMM0, dqword ptr [ECX + 32]
+    DB  $66, $0F, $38, $DE, $41, $10                //  AESDEC  XMM0, dqword ptr [ECX + 16]
+    DB  $66, $0F, $38, $DE, $01                     //  AESDEC  XMM0, dqword ptr [ECX]
+  {$ELSE}
+    AESDEC      XMM0, dqword ptr [KeySchedule + 128]
+    AESDEC      XMM0, dqword ptr [KeySchedule + 112]
+    AESDEC      XMM0, dqword ptr [KeySchedule + 96]
+    AESDEC      XMM0, dqword ptr [KeySchedule + 80]
+    AESDEC      XMM0, dqword ptr [KeySchedule + 64]
+    AESDEC      XMM0, dqword ptr [KeySchedule + 48]
+    AESDEC      XMM0, dqword ptr [KeySchedule + 32]
+    AESDEC      XMM0, dqword ptr [KeySchedule + 16]
+    AESDEC      XMM0, dqword ptr [KeySchedule]
+  {$ENDIF}
+    CMP         Rounds,       10
+    JNA         @LastRound
+
+    // 12 rounds (192bit key)
+    SUB         KeySchedule,  32
+  {$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $38, $DE, $41, $10  //  AESDEC  XMM0, dqword ptr [ECX + 16]
+    DB  $66, $0F, $38, $DE, $01       //  AESDEC  XMM0, dqword ptr [ECX]
+  {$ELSE}
+    AESDEC      XMM0, dqword ptr [KeySchedule + 16]
+    AESDEC      XMM0, dqword ptr [KeySchedule]
+  {$ENDIF}
+    CMP         Rounds,       12
+    JNA         @LastRound
+
+    // 14 rounds (256bit key)
+    SUB         KeySchedule,  32
+  {$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $38, $DE, $41, $10  //  AESDEC  XMM0, dqword ptr [ECX + 16]
+    DB  $66, $0F, $38, $DE, $01       //  AESDEC  XMM0, dqword ptr [ECX]
+  {$ELSE}
+    AESDEC      XMM0, dqword ptr [KeySchedule + 16]
+    AESDEC      XMM0, dqword ptr [KeySchedule]
+  {$ENDIF}
+
+@LastRound:
+    SUB         KeySchedule,  16
+  {$IFDEF ASM_MachineCode}
+    DB  $66, $0F, $38, $DF, $01       // AESDECLAST  XMM0, dqword ptr [ECX]
+  {$ELSE}
+    AESDECLAST  XMM0, dqword ptr [KeySchedule]
+  {$ENDIF}
+
+    // store output
+    MOVUPS      dqword ptr [Output],  XMM0
+end;
+
+{$IFDEF ASMSuppressSizeWarnings}
+  {$WARN 7122 ON}
+  {$WARN 2087 ON}
+{$ENDIF}
+
+{------------------------------------------------------------------------------}
+{   TAESCipherAccelerated - protected methods                                  }
+{------------------------------------------------------------------------------}
+
+procedure TAESCipherAccelerated.CipherInit;
+begin
+fAccelerated := AccelerationSupported;
+fKeySchedulePtr := {%H-}Pointer(({%H-}PtrUInt(Addr(fKeySchedule)) + $F) and not PtrUInt($F));
+If fAccelerated then
+  begin
+    case fKeyLength of
+      r128bit:  AESNI_KeyExpand_128(fKey,fKeySchedulePtr);
+      r192bit:  AESNI_KeyExpand_192(fKey,fKeySchedulePtr);
+      r256bit:  AESNI_KeyExpand_256(fKey,fKeySchedulePtr);
+    else
+      raise Exception.CreateFmt('TAESCipherAccelerated.CipherInit: Unsupported key length (%d).',[Ord(fKeyLength)]);
+    end;
+    If (Mode = cmDecrypt) and not (ModeOfOperation in [moCFB,moOFB,moCTR]) then
+      AESNI_KeyExpand_Dec(fKeySchedulePtr,UInt32(fNr - 1));
+  end
+else inherited CipherInit;
+{
+  for decryption, change schedule pointer so it points to the last four words,
+  not at the beginning
+}
+If (Mode = cmDecrypt) and not (ModeOfOperation in [moCFB,moOFB,moCTR]) then
+  fKeySchedulePtr := {%H-}Pointer({%H-}PtrUInt(fKeySchedulePtr) + PtrUInt(fNr * fNb * SizeOf(TRijWord)));
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipherAccelerated.Encrypt(const Input; out Output);
+begin
+If fAccelerated then
+  AESNI_Encrypt(@Input,@Output,fKeySchedulePtr,UInt8(fNr))
+else
+  inherited Encrypt(Input,Output);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipherAccelerated.Decrypt(const Input; out Output);
+begin
+If fAccelerated then
+  AESNI_Decrypt(@Input,@Output,fKeySchedulePtr,UInt8(fNr))
+else
+  inherited Decrypt(Input,Output);
+end;
+
+{------------------------------------------------------------------------------}
+{   TAESCipherAccelerated - public methods                                     }
+{------------------------------------------------------------------------------}
+
+class Function TAESCipherAccelerated.AccelerationSupported: Boolean;
+begin
+with TSimpleCPUID.Create do
+try
+  Result := Info.SupportedExtensions.AES;
+finally
+  Free;
+end;
+end;
+
+{$ENDIF PurePascal}
 
 end.
