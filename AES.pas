@@ -18,6 +18,7 @@
 
   Dependencies:
     AuxTypes    - github.com/ncs-sniper/Lib.AuxTypes
+    AuxClasses  - github.com/ncs-sniper/Lib.AuxClasses
     StrRect     - github.com/ncs-sniper/Lib.StrRect
   * SimpleCPUID - github.com/ncs-sniper/Lib.SimpleCPUID
 
@@ -75,7 +76,7 @@ interface
 
 uses
   Classes,
-  AuxTypes;
+  AuxTypes, AuxClasses;
 
 {==============================================================================}
 {------------------------------------------------------------------------------}
@@ -102,7 +103,7 @@ type
   TBCUpdateProc = procedure(const Input; out Output) of object;
   TBCProgressEvent = procedure(Sender: TObject; Progress: Double) of object;
 
-  TBlockCipher = class(TObject)
+  TBlockCipher = class(TCustomObject)
   private
     fMode:            TBCMode;
     fModeOfOperation: TBCModeOfOperation;
