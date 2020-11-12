@@ -28,11 +28,11 @@
 unit AES;
 
 {$IF defined(CPU64) or defined(CPU64BITS)}
-  {$DEFINE 64bit}
+  {$DEFINE CPU64bit}
 {$ELSEIF defined(CPU16)}
   {$MESSAGE FATAL '16bit CPU not supported'}
 {$ELSE}
-  {$DEFINE 32bit}
+  {$DEFINE CPU32bit}
 {$IFEND}
 
 {$IF defined(CPUX86_64) or defined(CPUX64)}
@@ -353,7 +353,7 @@ begin
 If fBlockBytes > 0 then
   begin
   {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-  {$IFDEF 64bit}
+  {$IFDEF CPU64bit}
     If fBlockBytes and 7 = 0 then
       begin
         For i := 0 to Pred(fBlockBytes shr 3) do
