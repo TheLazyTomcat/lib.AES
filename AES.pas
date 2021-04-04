@@ -74,113 +74,22 @@ unit AES;
 interface
 
 uses
-  Classes,
-  AuxTypes, AuxClasses;
+  AuxTypes,
+  CipherBase;
 
-{==============================================================================}
-{------------------------------------------------------------------------------}
-{                                 TBlockCipher                                 }
-{------------------------------------------------------------------------------}
-{==============================================================================}
-
-{==============================================================================}
-{   TBlockCipher - declaration                                                 }
-{==============================================================================}
-{
-  TBlockCipher serves as a base class for all block ciphers - it will be moved
-  to a separate unit in the future.
-}
-
-const
-  BlocksPerStreamBuffer = 1024;
-
+{===============================================================================
+    Library-specific exceptions
+===============================================================================}
 type
-  TBCMode            = (cmUndefined,cmEncrypt,cmDecrypt);
-  TBCModeOfOperation = (moECB,moCBC,moPCBC,moCFB,moOFB,moCTR);
-  TBCPadding         = (padZeroes,padPKCS7,padANSIX923,padISO10126,padISOIEC7816_4);
+  EAESException = class(ECipherException);
 
-  TBCUpdateProc = procedure(const Input; out Output) of object;
-  TBCProgressEvent = procedure(Sender: TObject; Progress: Double) of object;
+  EAESInvalidValue = class(EAESException);
 
-  TBlockCipher = class(TCustomObject)
-  private
-    fMode:            TBCMode;
-    fModeOfOperation: TBCModeOfOperation;
-    fPadding:         TBCPadding;
-    fInitVector:      Pointer;
-    fInitVectorBytes: TMemSize;
-    fKey:             Pointer;
-    fKeyBytes:        TMemSize;
-    fTempBlock:       Pointer;
-    fBlockBytes:      TMemSize;
-    fUpdateProc:      TBCUpdateProc;
-    fOnProgress:      TBCProgressEvent;
-    Function GetInitVectorBits: TMemSize;
-    Function GetKeyBits: TMemSize;
-    Function GetBlockBits: TMemSize;  
-  protected
-    procedure SetKeyBytes(Value: TMemSize); virtual;
-    procedure SetBlockBytes(Value: TMemSize); virtual;
-    procedure SetModeOfOperation(Value: TBCModeOfOperation); virtual;
-    procedure BlocksXOR(const Src1,Src2; out Dest); virtual;
-    procedure BlocksCopy(const Src; out Dest); virtual;
-    procedure Update_ECB(const Input; out Output); virtual;
-    procedure Update_CBC(const Input; out Output); virtual;
-    procedure Update_PCBC(const Input; out Output); virtual;
-    procedure Update_CFB(const Input; out Output); virtual;
-    procedure Update_OFB(const Input; out Output); virtual;
-    procedure Update_CTR(const Input; out Output); virtual;
-    procedure ProcessBuffer(Buffer: Pointer; Size: TMemSize); virtual;
-    procedure PrepareUpdateProc; virtual;
-    procedure DoProgress(Progress: Double); virtual;
-    procedure CipherInit; virtual; abstract;
-    procedure CipherFinal; virtual; abstract;
-    procedure CipherEncrypt(const Input; out Output); virtual; abstract;
-    procedure CipherDecrypt(const Input; out Output); virtual; abstract;
-    procedure Initialize(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
-    procedure Initialize(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode); overload; virtual;
-  public
-    constructor Create; overload; virtual;
-    destructor Destroy; override;
-    procedure Update(const Input; out Output); virtual;
-    procedure Final(const Input; InputSize: TMemSize; out Output); virtual;
-    Function OutputSize(InputSize: TMemSize): TMemSize; virtual;
-    procedure ProcessBytes(const Input; InputSize: TMemSize; out Output); overload; virtual;
-    procedure ProcessBytes(var Buff; Size: TMemSize); overload; virtual;
-    procedure ProcessStream(Input, Output: TStream); overload; virtual;
-    procedure ProcessStream(Stream: TStream); overload; virtual;
-    procedure ProcessFile(const InputFileName, OutputFileName: String); overload; virtual;
-    procedure ProcessFile(const FileName: String); overload; virtual;
-    procedure ProcessAnsiString(const InputStr: AnsiString; var OutputStr: AnsiString); overload; virtual;
-    procedure ProcessAnsiString(var Str: AnsiString); overload; virtual;
-    procedure ProcessWideString(const InputStr: UnicodeString; var OutputStr: UnicodeString); overload; virtual;
-    procedure ProcessWideString(var Str: UnicodeString); overload; virtual;
-    procedure ProcessString(const InputStr: String; var OutputStr: String); overload; virtual;
-    procedure ProcessString(var Str: String); overload; virtual;
-    property InitVector: Pointer read fInitVector;
-    property Key: Pointer read fKey;
-    property Mode: TBCMode read fMode;
-    property ModeOfOperation: TBCModeOfOperation read fModeOfOperation write SetModeOfOperation;
-    property Padding: TBCPadding read fPadding write fPadding;
-    property InitVectorBytes: TMemSize read fInitVectorBytes;
-    property InitVectorBits: TMemSize read GetInitVectorBits;
-    property KeyBytes: TMemSize read fKeyBytes;
-    property KeyBits: TMemSize read GetKeyBits;
-    property BlockBytes: TMemSize read fBlockBytes;
-    property BlockBits: TMemSize read GetBlockBits;
-    property OnProgress: TBCProgressEvent read fOnProgress write fOnProgress;
-  end;
-
-{==============================================================================}
-{------------------------------------------------------------------------------}
-{                               TRijndaelCipher                                }
-{------------------------------------------------------------------------------}
-{==============================================================================}
-
-{==============================================================================}
-{   TRijndaelCipher - declaration                                              }
-{==============================================================================}
-
+{===============================================================================
+--------------------------------------------------------------------------------
+                                TRijndaelCipher
+--------------------------------------------------------------------------------
+===============================================================================}
 type
   TRijLength  = (r128bit,r160bit,r192bit,r224bit,r256bit);
 
@@ -191,45 +100,65 @@ type
   TRijState        = array[0..7] of TRijWord;   {256 bits}
   TRijRowShiftOffs = array[0..3] of Integer;
 
+{===============================================================================
+    TRijndaelCipher - class declaration
+===============================================================================}
+type
   TRijndaelCipher = class(TBlockCipher)
-  private
-    fKeyLength:   TRijLength;
-    fBlockLength: TRijLength;
-    fNk:          Integer;    // length of the key in words
-    fNb:          Integer;    // length of the block in words (also number of columns in state)
-    fNr:          Integer;    // number of rounds (function of Nk an Nb)
+  protected
+    fNb:          Integer;
+    fNk:          Integer;
+    fNr:          Integer;
     fKeySchedule: TRijKeySchedule;
     fRowShiftOff: TRijRowShiftOffs;
-  protected
-    procedure SetModeOfOperation(Value: TBCModeOfOperation); override;
-    procedure SetKeyLength(Value: TRijLength); virtual;
+    // getters/setters
+    procedure SetBlockBytes(Value: TMemSize); override;
+    procedure SetKeyBytes(Value: TMemSize); override;
+    Function GetBlockLength: TRijLength; virtual;
     procedure SetBlockLength(Value: TRijLength); virtual;
+    Function GetKeyLength: TRijLength; virtual;
+    procedure SetKeyLength(Value: TRijLength); virtual;
+    // cipher implementation
     procedure CipherInit; override;
     procedure CipherFinal; override;
-    procedure CipherEncrypt(const Input; out Output); override;
-    procedure CipherDecrypt(const Input; out Output); override;
+    procedure BlockEncrypt(const Input; out Output); override;
+    procedure BlockDecrypt(const Input; out Output); override;
+    // initialization/finalization
+    procedure Initialize; override;
+    // utility methods
+    procedure CalculateNumberOfRounds; virtual;
   public
-    constructor Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
-    constructor Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
-    procedure Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
-    procedure Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; virtual;
-    property KeyLength: TRijLength read fKeyLength;
-    property BlockLength: TRijLength read fBlockLength;
-    property Nk: Integer read fNk;
-    property Nb: Integer read fNb;
-    property Nr: Integer read fNr;
+    class Function CipherName: String; override;
+    class Function LengthToBytes(Value: TRijLength): TMemSize; virtual;
+    class Function BytesToLength(Value: TMemSize): TRijLength; virtual;
+    constructor CreateForEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength); overload; virtual;
+    constructor CreateForEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
+    constructor CreateForEncryption(const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
+    constructor CreateForDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
+    constructor CreateForDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
+    constructor CreateForDecryption(const Key; KeyLength, BlockLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
+    procedure SetupEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength); overload; virtual;
+    procedure SetupEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
+    procedure SetupEncryption(const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
+    procedure SetupDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength); overload; virtual;
+    procedure SetupDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
+    procedure SetupDecryption(const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
+    property BlockLength: TRijLength read GetBlockLength write SetBlockLength;
+    property KeyLength: TRijLength read GetKeyLength write SetKeyLength;
+    property Nb: Integer read fNb;  // length of block in words (also number of columns in state)
+    property Nk: Integer read fNk;  // length of key in words
+    property Nr: Integer read fNr;  // number of rounds (function of Nk and Nb)
   end;
-
-{==============================================================================}
-{------------------------------------------------------------------------------}
-{                                  TAESCipher                                  }
-{------------------------------------------------------------------------------}
-{==============================================================================}
-
-{==============================================================================}
-{   TAESCipher - declaration                                                   }
-{==============================================================================}
-
+(*
+{===============================================================================
+--------------------------------------------------------------------------------
+                                   TAESCipher
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TAESCipher - class declaration
+===============================================================================}
+type
   TAESCipher = class(TRijndaelCipher)
   protected
     procedure SetKeyLength(Value: TRijLength); override;
@@ -248,15 +177,14 @@ type
     procedure Init(const Key; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
   end;
 
-{==============================================================================}
-{------------------------------------------------------------------------------}
-{                            TAESCipherAccelerated                             }
-{------------------------------------------------------------------------------}
-{==============================================================================}
-
-{==============================================================================}
-{   TAESCipherAccelerated - declaration                                        }
-{==============================================================================}
+{===============================================================================
+--------------------------------------------------------------------------------
+                             TAESCipherAccelerated                             
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TAESCipherAccelerated - class declaration
+===============================================================================}
 
 {$IFDEF PurePascal}
   TAESCipherAccelerated = TAESCipher;
@@ -273,7 +201,7 @@ type
     class Function AccelerationSupported: Boolean; override;
   end;
 {$ENDIF}
-
+*)
 implementation
 
 uses
@@ -287,628 +215,14 @@ uses
   {$DEFINE W5058:={$WARN 5058 OFF}} // Variable "$1" does not seem to be initialized
 {$ENDIF}
 
-{==============================================================================}
-{------------------------------------------------------------------------------}
-{                                 TBlockCipher                                 }
-{------------------------------------------------------------------------------}
-{==============================================================================}
-
-{==============================================================================}
-{   TBlockCipher - implementation                                              }
-{==============================================================================}
-
-{------------------------------------------------------------------------------}
-{   TBlokcCipher - private methods                                             }
-{------------------------------------------------------------------------------}
-
-Function TBlockCipher.GetInitVectorBits: TMemSize;
-begin
-Result := TMemSize(fInitVectorBytes shl 3);
-end;
-
-//------------------------------------------------------------------------------
-
-Function TBlockCipher.GetKeyBits: TMemSize;
-begin
-Result := TMemSize(fKeyBytes shl 3);
-end;
-
-//------------------------------------------------------------------------------
-
-Function TBlockCipher.GetBlockBits: TMemSize;
-begin
-Result := TMemSize(fBlockBytes shl 3);
-end;
-
-{------------------------------------------------------------------------------}
-{   TBlokcCipher - protected methods                                           }
-{------------------------------------------------------------------------------}
-
-procedure TBlockCipher.SetKeyBytes(Value: TMemSize);
-begin
-fKeyBytes := Value;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.SetBlockBytes(Value: TMemSize);
-begin
-fBlockBytes := Value;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.SetModeOfOperation(Value: TBCModeOfOperation);
-begin
-fModeOfOperation := Value;
-PrepareUpdateProc;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.BlocksXOR(const Src1,Src2; out Dest);
-var
-  i:  PtrUInt;
-begin
-If fBlockBytes > 0 then
-  begin
-  {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-  {$IFDEF CPU64bit}
-    If fBlockBytes and 7 = 0 then
-      begin
-        For i := 0 to Pred(fBlockBytes shr 3) do
-          PUInt64(PtrUInt(@Dest) + (i shl 3))^ :=
-            PUInt64(PtrUInt(@Src1) + (i shl 3))^ xor
-            PUInt64(PtrUInt(@Src2) + (i shl 3))^
-      end
-    else{$ENDIF} If fBlockBytes and 3 = 0 then
-      begin
-        For i := 0 to Pred(fBlockBytes shr 2) do
-          PUInt32(PtrUInt(@Dest) + (i shl 2))^ :=
-            PUInt32(PtrUInt(@Src1) + (i shl 2))^ xor
-            PUInt32(PtrUInt(@Src2) + (i shl 2))^
-      end
-    else
-      begin
-        For i := 0 to Pred(fBlockBytes) do
-          PByte(PtrUInt(@Dest) + i)^ :=
-            PByte(PtrUInt(@Src1) + i)^ xor
-            PByte(PtrUInt(@Src2) + i)^;
-      end;
-  {$IFDEF FPCDWM}{$POP}{$ENDIF}
-  end;
-end;
-
-//------------------------------------------------------------------------------
-
-{$IFDEF FPCDWM}{$PUSH}W5058{$ENDIF}
-procedure TBlockCipher.BlocksCopy(const Src; out Dest);
-begin
-Move(Src,Dest,fBlockBytes);
-end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.Update_ECB(const Input; out Output);
-begin
-case fMode of
-  cmEncrypt:  CipherEncrypt(Input,Output);
-  cmDecrypt:  CipherDecrypt(Input,Output);
-else
-  raise Exception.CreateFmt('TBlockCipher.Update_ECB: Invalid mode (%d).',[Ord(fMode)]);
-end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.Update_CBC(const Input; out Output);
-begin
-case fMode of
-  cmEncrypt:
-    begin
-      BlocksXOR(Input,fInitVector^,fTempBlock^);
-      CipherEncrypt(fTempBlock^,Output);
-      BlocksCopy(Output,fInitVector^);
-    end;
-  cmDecrypt:
-    begin
-      BlocksCopy(Input,fTempBlock^);
-      CipherDecrypt(Input,Output);
-      BlocksXOR(Output,fInitVector^,Output);
-      BlocksCopy(fTempBlock^,fInitVector^);
-    end;
-else
-  raise Exception.CreateFmt('TBlockCipher.Update_CBC: Invalid mode (%d).',[Ord(fMode)]);
-end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.Update_PCBC(const Input; out Output);
-begin
-case fMode of
-  cmEncrypt:
-    begin
-      BlocksXOR(Input,fInitVector^,fTempBlock^);
-      BlocksCopy(Input,fInitVector^);
-      CipherEncrypt(fTempBlock^,Output);
-      BlocksXOR(Output,fInitVector^,fInitVector^);
-    end;
-  cmDecrypt:
-    begin
-      CipherDecrypt(Input,fTempBlock^);
-      BlocksXOR(fTempBlock^,fInitVector^,fTempBlock^);
-      BlocksXOR(Input,fTempBlock^,fInitVector^);
-      BlocksCopy(fTempBlock^,Output);
-    end;
-else
-  raise Exception.CreateFmt('TBlockCipher.Update_PCBC: Invalid mode (%d).',[Ord(fMode)]);
-end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.Update_CFB(const Input; out Output);
-begin
-case fMode of
-  cmEncrypt:
-    begin
-      CipherEncrypt(fInitVector^,fTempBlock^);
-      BlocksXOR(fTempBlock^,Input,Output);
-      BlocksCopy(Output,fInitVector^);
-    end;
-  cmDecrypt:
-    begin
-      CipherEncrypt(fInitVector^,fTempBlock^);
-      BlocksCopy(Input,fInitVector^);
-      BlocksXOR(fTempBlock^,Input,Output);
-    end;
-else
-  raise Exception.CreateFmt('TBlockCipher.Update_CFB: Invalid mode (%d).',[Ord(fMode)]);
-end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.Update_OFB(const Input; out Output);
-begin
-CipherEncrypt(fInitVector^,fInitVector^);
-BlocksXOR(Input,fInitVector^,Output);
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.Update_CTR(const Input; out Output);
-begin
-If BlockBytes >= 8 then
-  begin
-    CipherEncrypt(fInitVector^,fTempBlock^);
-    BlocksXOR(Input,fTempBlock^,Output);
-  {$IFDEF OverflowChecks}{$Q-}{$ENDIF}
-    Int64(fInitVector^) := Int64(fInitVector^) + 1;
-  {$IFDEF OverflowChecks}{$Q+}{$ENDIF}
-  end
-else raise Exception.CreateFmt('TBlockCipher.Update_CTR: Too small block (%d), cannot use CTR.',[fBlockBytes]);
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.ProcessBuffer(Buffer: Pointer; Size: TMemSize);
-var
-  i:        Integer;
-  WorkPtr:  Pointer;
-begin
-If Size >= fBlockBytes then
-  For i := 0 to Pred(Size div fBlockBytes) do
-    begin
-    {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-      WorkPtr := Pointer(PtrUInt(Buffer) + PtrUInt(TMemSize(i) * fBlockBytes));
-    {$IFDEF FPCDWM}{$POP}{$ENDIF}
-      Update(WorkPtr^,WorkPtr^);
-    end;
-If (Size mod fBlockBytes) <> 0 then
-  begin
-  {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
-    WorkPtr := Pointer(PtrUInt(Buffer) + PtrUInt((Size div fBlockBytes) * fBlockBytes));
-  {$IFDEF FPCDWM}{$POP}{$ENDIF}
-    Final(WorkPtr^,Size mod fBlockBytes,WorkPtr^);
-  end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.PrepareUpdateProc;
-begin
-case fModeOfOperation of
-  moECB:  fUpdateProc := Update_ECB;
-  moCBC:  fUpdateProc := Update_CBC;
-  moPCBC: fUpdateProc := Update_PCBC;
-  moCFB:  fUpdateProc := Update_CFB;
-  moOFB:  fUpdateProc := Update_OFB;
-  moCTR:  fUpdateProc := Update_CTR;
-else
-  raise Exception.CreateFmt('TBlockCipher.PrepareUpdateProc: Unknown mode of operation (%d).',[Ord(fModeOfOperation)]);
-end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.DoProgress(Progress: Double);
-begin
-If Assigned(fOnProgress) then fOnProgress(Self,Progress);
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.Initialize(const Key; const InitVector; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
-begin
-If (KeyBytes > 0) and (BlockBytes > 0) then
-  begin
-    fMode := Mode;
-    ReallocMem(fKey,KeyBytes);
-    Move(Key,fKey^,KeyBytes);
-    fKeyBytes := KeyBytes;
-    ReallocMem(fInitVector,BlockBytes);
-    ReallocMem(fTempBlock,BlockBytes);
-    Move(InitVector,fInitVector^,BlockBytes);
-    fBlockBytes := BlockBytes;
-    PrepareUpdateProc;
-    CipherInit;
-  end
-else raise Exception.CreateFmt('TBlockCipher.Init: Size of key (%d) and blocks (%d) must be larger than zero.',[KeyBytes, BlockBytes]);
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-procedure TBlockCipher.Initialize(const Key; KeyBytes, BlockBytes: TMemSize; Mode: TBCMode);
-begin
-If (KeyBytes > 0) and (BlockBytes > 0) then
-  begin
-    fMode := Mode;
-    ReallocMem(fKey,KeyBytes);
-    Move(Key,fKey^,KeyBytes);
-    fKeyBytes := KeyBytes;
-    ReallocMem(fInitVector,BlockBytes);
-    FillChar(fInitVector^,BlockBytes,0);
-    ReallocMem(fTempBlock,BlockBytes);
-    fBlockBytes := BlockBytes;
-    PrepareUpdateProc;
-    CipherInit;
-  end
-else raise Exception.CreateFmt('TBlockCipher.Init: Size of key (%d) and blocks (%d) must be larger than zero.',[KeyBytes, BlockBytes]);
-end;
-
-{------------------------------------------------------------------------------}
-{   TBlokcCipher - public methods                                              }
-{------------------------------------------------------------------------------}
-
-constructor TBlockCipher.Create;
-begin
-inherited Create;
-fMode := cmUndefined;
-fModeOfOperation := moECB;
-fPadding := padZeroes;
-fInitVector := nil;
-fInitVectorBytes := 0;
-fKey := nil;
-fKeyBytes := 0;
-fTempBlock := nil;
-fBlockBytes := 0;
-end;
-
-//------------------------------------------------------------------------------
-
-
-destructor TBlockCipher.Destroy;
-begin
-CipherFinal;
-If fBlockBytes > 0 then
-  begin
-    If Assigned(fInitVector) then
-      FreeMem(fInitVector,fBlockBytes);
-    If Assigned(fTempBlock) then
-      FreeMem(fTempBlock,fBlockBytes);
-  end;
-If Assigned(fKey) and (fKeyBytes > 0) then
-  FreeMem(fKey,fKeyBytes);
-inherited;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.Update(const Input; out Output);
-begin
-If fMode in [cmEncrypt,cmDecrypt] then
-  fUpdateProc(Input,Output)
-else
-  raise Exception.CreateFmt('TBlockCipher.Update: Undefined or unknown mode (%d).',[Ord(fMode)]);
-end;
-
-//------------------------------------------------------------------------------
-
-{$IFDEF FPC_DisableWarns}
-  {$PUSH}{$WARN 4055 OFF} // Conversion between ordinals and pointers is not portable
-{$ENDIF}
-procedure TBlockCipher.Final(const Input; InputSize: TMemSize; out Output);
-var
-  i:          Integer;
-  TempBlock:  Pointer;
-begin
-If InputSize <= fBlockBytes then
-  begin
-    If InputSize < fBlockBytes then
-      begin
-        GetMem(TempBlock,fBlockBytes);
-        try
-          case fPadding of
-            padPKCS7:     {PKCS#7}
-              FillChar(TempBlock^,fBlockBytes,Byte(fBlockBytes - InputSize));
-            padANSIX923:  {ANSI X.923}
-              begin
-                FillChar(TempBlock^,fBlockBytes,0);
-                PByte(PtrUInt(TempBlock) + Pred(fBlockBytes))^ := Byte(fBlockBytes - InputSize);
-              end;
-            padISO10126:  {ISO 10126}
-              begin
-              Randomize;
-                For i := InputSize to Pred(fBlockBytes) do
-                  PByte(PtrUInt(TempBlock) + PtrUInt(i))^ := Byte(Random(256));
-              end;
-            padISOIEC7816_4:  {ISO/IEC 7816-4}
-              begin
-                FillChar(TempBlock^,fBlockBytes,0);
-                PByte(PtrUInt(TempBlock) + PtrUInt(InputSize))^ := $80;
-              end;
-          else
-            {padZeroes}
-            FillChar(TempBlock^,fBlockBytes,0);
-          end;
-          Move(Input,TempBlock^,InputSize);
-          Update(TempBlock^,Output);
-        finally
-          FreeMem(TempBlock,fBlockBytes);
-        end;
-      end
-    else Update(Input,Output);
-  end
-else raise Exception.CreateFmt('TBlockCipher.Final: Input buffer is too large (%d/%d).',[InputSize,fBlockBytes]);
-end;
-
-//------------------------------------------------------------------------------
-
-Function TBlockCipher.OutputSize(InputSize: TMemSize): TMemSize;
-begin
-Result := TMemSize(Ceil(InputSize / fBlockBytes)) * fBlockBytes;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.ProcessBytes(const Input; InputSize: TMemSize; out Output);
-var
-  Offset:     TMemSize;
-  BytesLeft:  TMemSize;
-begin
-If InputSize > 0 then
-  begin
-    Offset := 0;
-    BytesLeft := InputSize;
-    DoProgress(0.0);
-    while BytesLeft >= fBlockBytes do
-      begin
-        Update(Pointer(PtrUInt(@Input) + Offset)^,Pointer(PtrUInt(@Output) + Offset)^);
-        Dec(BytesLeft,fBlockBytes);
-        Inc(Offset,fBlockBytes);
-        DoProgress(Offset / InputSize);
-      end;
-    If BytesLeft > 0 then
-      Final(Pointer(PtrUInt(@Input) + Offset)^,BytesLeft,Pointer(PtrUInt(@Output) + Offset)^);
-    DoProgress(1.0);
-  end;
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-procedure TBlockCipher.ProcessBytes(var Buff; Size: TMemSize);
-begin
-ProcessBytes(Buff,Size,Buff);
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.ProcessStream(Input, Output: TStream);
-var
-  BuffSize:       TMemSize;
-  Buffer:         Pointer;
-  BytesRead:      TMemSize;
-  ProgressStart:  Int64;
-begin
-If Input = Output then
-  ProcessStream(Input)
-else
-  begin
-    If (Input.Size - Input.Position) > 0 then
-      begin
-        BuffSize := fBlockBytes * BlocksPerStreamBuffer;
-        GetMem(Buffer,BuffSize);
-        try
-          DoProgress(0.0);
-          ProgressStart := Input.Position;
-          repeat
-            BytesRead := Input.Read(Buffer^,BuffSize);
-            If BytesRead > 0 then
-              begin
-                ProcessBuffer(Buffer,BytesRead);
-                Output.WriteBuffer(Buffer^,TMemSize(Ceil(BytesRead / fBlockBytes)) * fBlockBytes);
-              end;
-            DoProgress((Input.Position - ProgressStart) / (Input.Size - ProgressStart));
-          until BytesRead < BuffSize;
-          DoProgress(1.0);
-        finally
-          FreeMem(Buffer,BuffSize);
-        end;
-      end;
-  end;
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-procedure TBlockCipher.ProcessStream(Stream: TStream);
-var
-  BuffSize:       TMemSize;
-  Buffer:         Pointer;
-  BytesRead:      TMemSize;
-  ProgressStart:  Int64;
-begin
-If (Stream.Size - Stream.Position) > 0 then
-  begin
-    BuffSize := fBlockBytes * BlocksPerStreamBuffer;
-    GetMem(Buffer,BuffSize);
-    try
-      DoProgress(0.0);
-      ProgressStart := Stream.Position;
-      repeat
-        BytesRead := Stream.Read(Buffer^,BuffSize);
-        If BytesRead > 0 then
-          begin
-            ProcessBuffer(Buffer,BytesRead);
-            Stream.Seek(-Int64(BytesRead),soCurrent);
-            Stream.WriteBuffer(Buffer^,TMemSize(Ceil(BytesRead / fBlockBytes)) * fBlockBytes);
-          end;
-        DoProgress((Stream.Position - ProgressStart) / (Stream.Size - ProgressStart));
-      until BytesRead < BuffSize;
-      DoProgress(1.0);
-    finally
-      FreeMem(Buffer,BuffSize);
-    end;
-  end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.ProcessFile(const InputFileName, OutputFileName: String);
-var
-  InputStream:  TFileStream;
-  OutputStream: TFileStream;
-begin
-If AnsiSameText(InputFileName,OutputFileName) then
-  ProcessFile(InputFileName)
-else
-  begin
-    InputStream := TFileStream.Create(StrToRTL(InputFileName),fmOpenRead or fmShareDenyWrite);
-    try
-      OutputStream := TFileStream.Create(StrToRTL(OutputFileName),fmCreate or fmShareExclusive);
-      try
-        ProcessStream(InputStream,OutputStream);
-      finally
-        OutputStream.Free;
-      end;
-    finally
-      InputStream.Free;
-    end;
-  end;
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-procedure TBlockCipher.ProcessFile(const FileName: String);
-var
-  FileStream: TFileStream;
-begin
-FileStream := TFileStream.Create(StrToRTL(FileName),fmOpenReadWrite or fmShareExclusive);
-try
-  ProcessStream(FileStream);
-finally
-  FileStream.Free;
-end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.ProcessAnsiString(const InputStr: AnsiString; var OutputStr: AnsiString);
-begin
-If PAnsiChar(InputStr) = PAnsiChar(OutputStr) then
-  ProcessAnsiString(OutputStr)
-else
-  begin
-    SetLength(OutputStr,Ceil(OutputSize(Length(InputStr) * SizeOf(AnsiChar)) / SizeOf(AnsiChar)));
-    ProcessBytes(PAnsiChar(InputStr)^,Length(InputStr) * SizeOf(AnsiChar),PAnsiChar(OutputStr)^);
-  end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.ProcessAnsiString(var Str: AnsiString);
-var
-  InLength: TStrSize;
-begin
-InLength := Length(Str);
-SetLength(Str,Ceil(OutputSize(InLength * SizeOf(AnsiChar)) / SizeOf(AnsiChar)));
-ProcessBytes(PAnsiChar(Str)^,InLength * SizeOf(AnsiChar));
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.ProcessWideString(const InputStr: UnicodeString; var OutputStr: UnicodeString);
-begin
-If PWideChar(InputStr) = PWideChar(OutputStr) then
-  ProcessWideString(OutputStr)
-else
-  begin
-    SetLength(OutputStr,Ceil(OutputSize(Length(InputStr) * SizeOf(WideChar)) / SizeOf(WideChar)));
-    ProcessBytes(PWideChar(InputStr)^,Length(InputStr) * SizeOf(WideChar),PWideChar(OutputStr)^);
-  end;
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.ProcessWideString(var Str: UnicodeString);
-var
-  InLength: TStrSize;
-begin
-InLength := Length(Str);
-SetLength(Str,Ceil(OutputSize(InLength * SizeOf(WideChar)) / SizeOf(WideChar)));
-ProcessBytes(PWideChar(Str)^,InLength * SizeOf(WideChar));
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TBlockCipher.ProcessString(const InputStr: String; var OutputStr: String);
-begin
-If PChar(InputStr) = PChar(OutputStr) then
-  ProcessString(OutputStr)
-else
-  begin
-    SetLength(OutputStr,Ceil(OutputSize(Length(InputStr) * SizeOf(Char)) / SizeOf(Char)));
-    ProcessBytes(PChar(InputStr)^,Length(InputStr) * SizeOf(Char),PChar(OutputStr)^);
-  end;
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-procedure TBlockCipher.ProcessString(var Str: String);
-var
-  InLength: TStrSize;
-begin
-InLength := Length(Str);
-SetLength(Str,Ceil(OutputSize(InLength * SizeOf(Char)) / SizeOf(Char)));
-ProcessBytes(PChar(Str)^,InLength * SizeOf(Char));
-end;
-
-
-{==============================================================================}
-{------------------------------------------------------------------------------}
-{                               TRijndaelCipher                                }
-{------------------------------------------------------------------------------}
-{==============================================================================}
-
-{==============================================================================}
-{   TRijndaelCipher - implementation                                           }
-{==============================================================================}
-
-{------------------------------------------------------------------------------}
-{   Rijndael cipher lookup tables                                              }
-{------------------------------------------------------------------------------}
+{===============================================================================
+--------------------------------------------------------------------------------
+                                TRijndaelCipher
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TRijndaelCipher - lookup tables
+===============================================================================}
 {
   Majority of calculations is replaced by following lookup tables.
   Also note that current imlementation is optimized for little endian systems,
@@ -1389,59 +703,68 @@ const
   RowShiftOffsets: array[4..8] of TRijRowShiftOffs = (
     (0,1,2,3),(0,1,2,3),(0,1,2,3),(0,1,2,4),(0,1,3,4));
 
-{------------------------------------------------------------------------------}
-{   TRijndaelCipher - protected methods                                        }
-{------------------------------------------------------------------------------}
+{===============================================================================
+    TRijndaelCipher - class implementation
+===============================================================================}
+{-------------------------------------------------------------------------------
+    TRijndaelCipher - protected methods
+-------------------------------------------------------------------------------}
 
-procedure TRijndaelCipher.SetModeOfOperation(Value: TBCModeOfOperation);
-var
-  OldValue: TBCModeOfOperation;
+procedure TRijndaelCipher.SetBlockBytes(Value: TMemSize);
 begin
-OldValue := ModeOfOperation;
-inherited SetModeOfOperation(Value);
-If (OldValue <> Value) and (Value in [moCFB,moOFB,moCTR]) and (Mode = cmDecrypt) then
-  CipherInit;
+If Value in [16,20,24,28,32] then
+  begin
+    inherited SetBlockBytes(Value);
+    fNb := Value div SizeOf(TRijWord);
+    CalculateNumberOfRounds;
+  end
+else raise EAESInvalidValue.CreateFmt('TRijndaelCipher.SetBlockBytes: Unsupported block size (%d).',[Value]);
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TRijndaelCipher.SetKeyLength(Value: TRijLength);
+procedure TRijndaelCipher.SetKeyBytes(Value: TMemSize);
 begin
-fKeyLength := Value;
-case fKeyLength of
-  r128bit: fNk := 4;
-  r160bit: fNk := 5;
-  r192bit: fNk := 6;
-  r224bit: fNk := 7;
-  r256bit: fNk := 8;
-else
-  raise Exception.CreateFmt('TRijndaelCipher.SetKeyLength: Unsupported key length (%d).',[Ord(Value)]);
+If Value in [16,20,24,28,32] then
+  begin
+    inherited SetKeyBytes(Value);
+    fNk := Value div SizeOf(TRijWord);
+    CalculateNumberOfRounds;
+  end
+else raise EAESInvalidValue.CreateFmt('TRijndaelCipher.SetKeyBytes: Unsupported key size (%d).',[Value]);
 end;
-fNr := Max(fNk,fNb) + 6;
-SetKeyBytes(fNk * SizeOf(TRijWord));
+
+//------------------------------------------------------------------------------
+
+Function TRijndaelCipher.GetBlockLength: TRijLength;
+begin
+Result := BytesToLength(fBlockBytes);
 end;
 
 //------------------------------------------------------------------------------
 
 procedure TRijndaelCipher.SetBlockLength(Value: TRijLength);
 begin
-fBlockLength := Value;
-case fBlockLength of
-  r128bit: fNb := 4;
-  r160bit: fNb := 5;
-  r192bit: fNb := 6;
-  r224bit: fNb := 7;
-  r256bit: fNb := 8;
-else
-  raise Exception.CreateFmt('TRijndaelCipher.SetBlockLength: Unsupported block length (%d).',[Ord(Value)]);
-end;
-fNr := Max(fNk,fNb) + 6;
-SetBlockBytes(fNb * SizeOf(TRijWord));
-fRowShiftOff := RowShiftOffsets[fNb];
+SetBlockBytes(LengthToBytes(Value));
 end;
 
 //------------------------------------------------------------------------------
 
+Function TRijndaelCipher.GetKeyLength: TRijLength;
+begin
+Result := BytesToLength(fKeyBytes);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TRijndaelCipher.SetKeyLength(Value: TRijLength);
+begin
+SetKeyBytes(LengthToBytes(Value));
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TRijndaelCipher.CipherInit;
 (*
   Complete pseudocode of key expansion (Equivalent Inverse Cipher is used).
   Source: FIPS 197.
@@ -1483,11 +806,12 @@ end;
 
  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 *)
-procedure TRijndaelCipher.CipherInit;
 var
   i:    Integer;
   Temp: TRijWord;
 begin
+// prepare row shifts
+fRowShiftOff := RowShiftOffsets[fNb];
 (*
   Key words are simply copied into lower Nk words of key shedule.
 
@@ -1496,7 +820,7 @@ begin
   further computations.
 *)
 For i := 0 to Pred(fNk) do
-  fKeySchedule[i] := PRijWord(PtrUInt(Key) + PtrUInt(4 * i))^;
+  fKeySchedule[i] := PRijWord(PtrUInt(fKey) + PtrUInt(4 * i))^;
 (*
   RotWord rotates bytes in input 32bit word one place up as this:
 
@@ -1530,8 +854,8 @@ For i := fNk to Pred(fNb * (fNr + 1)) do
 (*
   Modified decryption shedule (dw) is not created, modified values are instead
   stored in normal shedule which in turn cannot be used for encryption (not a
-  problem, TBlockCipher can be initialized either for decryption or encryption
-  mode, but not both).
+  problem, cipher can be initialized either for decryption or encryption mode,
+  but not both).
 
   Modified value is computed this way:
 
@@ -1586,6 +910,8 @@ end;
 
 //------------------------------------------------------------------------------
 
+{$IFDEF FPCDWM}{$PUSH}W5036 W5058{$ENDIF}
+procedure TRijndaelCipher.BlockEncrypt(const Input; out Output);
 (*
   Complete pseudocode of block encryption.
   Source: FIPS 197.
@@ -1616,8 +942,6 @@ end;
 
  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 *)
-{$IFDEF FPCDWM}{$PUSH}W5036 W5058{$ENDIF}
-procedure TRijndaelCipher.CipherEncrypt(const Input; out Output);
 var
   i,j:        Integer;
   State:      TRijState;
@@ -1632,7 +956,7 @@ var
 
 begin
 (*
-  AddRoundKey at this point is simple XOR of words from inpuf block with key
+  AddRoundKey at this point is simple XOR of words from input block with key
   shedule.
 *)
 For i := 0 to Pred(fNb) do
@@ -1814,6 +1138,8 @@ end;
 
 //------------------------------------------------------------------------------
 
+{$IFDEF FPCDWM}{$PUSH}W5036 W5058{$ENDIF}
+procedure TRijndaelCipher.BlockDecrypt(const Input; out Output);
 (*
   Complete pseudocode of block decryption (equivalent inverse cipher).
   Source: FIPS 197.
@@ -1844,8 +1170,6 @@ end;
 
  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 *)
-{$IFDEF FPCDWM}{$PUSH}W5036 W5058{$ENDIF}
-procedure TRijndaelCipher.CipherDecrypt(const Input; out Output);
 var
   i,j:        Integer;
   State:      TRijState;
@@ -1860,7 +1184,7 @@ var
 
 begin
 (*
-  AddRoundKey is simple XOR of words from inpuf block with key shedule words.
+  AddRoundKey is simple XOR of words from input block with key shedule words.
 *)
 For i := 0 to Pred(fNb) do
   State[i] := TRijState(Input)[i] xor fKeySchedule[fNr * fNb + i];
@@ -1998,43 +1322,157 @@ Move(TempState,Output,BlockBytes);
 end;
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
 
-{------------------------------------------------------------------------------}
-{   TRijndaelCipher - public methods                                           }
-{------------------------------------------------------------------------------}
+//------------------------------------------------------------------------------
 
-constructor TRijndaelCipher.Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
+procedure TRijndaelCipher.Initialize;
 begin
-Create;
-Init(Key,InitVector,KeyLength,BlockLength,Mode);
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-constructor TRijndaelCipher.Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
-begin
-Create;
-Init(Key,KeyLength,BlockLength,Mode);
+inherited;
+SetBlockBytes(16);
+SetKeyBytes(16);
+fNb := 4;
+fNk := 4;
+CalculateNumberOfRounds;  // sets fNr
+FillChar(fKeySchedule,SizeOf(TRijKeySchedule),0);
+fRowShiftOff := RowShiftOffsets[fNb];
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TRijndaelCipher.Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
+procedure TRijndaelCipher.CalculateNumberOfRounds;
 begin
-SetKeyLength(KeyLength);
-SetBlockLength(BlockLength);
-inherited Initialize(Key,InitVector,KeyBytes,BlockBytes,Mode);
+fNr := Max(fNk,fNb) + 6;
 end;
 
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
+{-------------------------------------------------------------------------------
+    TRijndaelCipher - public methods
+-------------------------------------------------------------------------------}
 
-procedure TRijndaelCipher.Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
+class Function TRijndaelCipher.CipherName: String;
 begin
-SetKeyLength(KeyLength);
-SetBlockLength(BlockLength);
-inherited Initialize(Key,KeyBytes,BlockBytes,Mode);
+Result := 'Rijndael';
 end;
 
+//------------------------------------------------------------------------------
 
+class Function TRijndaelCipher.LengthToBytes(Value: TRijLength): TMemSize;
+begin
+case Value of
+  r128bit:  Result := 16;
+  r160bit:  Result := 20;
+  r192bit:  Result := 24;
+  r224bit:  Result := 28;
+  r256bit:  Result := 32;
+else
+  raise EAESInvalidValue.CreateFmt('TRijndaelCipher.LengthToBytes: Invalid length (%d).',[Ord(Value)]);
+end;
+end;
+
+//------------------------------------------------------------------------------
+
+class Function TRijndaelCipher.BytesToLength(Value: TMemSize): TRijLength;
+begin
+case Value of
+  16: Result := r128bit;
+  20: Result := r160bit;
+  24: Result := r192bit;
+  28: Result := r224bit;
+  32: Result := r256bit;
+else
+  raise EAESInvalidValue.CreateFmt('TRijndaelCipher.BytesToLength: Invalid length (%d).',[Value]);
+end;
+end;
+
+//------------------------------------------------------------------------------
+
+constructor TRijndaelCipher.CreateForEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength);
+begin
+Create;
+SetupEncryption(ModeOfOperation,Key,InitVector,KeyLength,BlockLength);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TRijndaelCipher.CreateForEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength);
+begin
+Create;
+SetupEncryption(ModeOfOperation,Key,KeyLength,BlockLength);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TRijndaelCipher.CreateForEncryption(const Key; KeyLength, BlockLength: TRijLength);
+begin
+Create;
+SetupEncryption(Key,KeyLength,BlockLength);
+end;
+
+//------------------------------------------------------------------------------
+
+constructor TRijndaelCipher.CreateForDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+begin
+Create;
+SetupDecryption(ModeOfOperation,Key,InitVector,KeyLength,BlockLength);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TRijndaelCipher.CreateForDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+begin
+Create;
+SetupDecryption(ModeOfOperation,Key,KeyLength,BlockLength);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TRijndaelCipher.CreateForDecryption(const Key; KeyLength, BlockLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+begin
+Create;
+SetupDecryption(Key,KeyLength,BlockLength);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TRijndaelCipher.SetupEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength);
+begin
+CipherSetup(cmEncrypt,ModeOfOperation,@Key,@InitVector,LengthToBytes(KeyLength),LengthToBytes(BlockLength));
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TRijndaelCipher.SetupEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength);
+begin
+CipherSetup(cmEncrypt,ModeOfOperation,@Key,nil,LengthToBytes(KeyLength),LengthToBytes(BlockLength));
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TRijndaelCipher.SetupEncryption(const Key; KeyLength, BlockLength: TRijLength);
+begin
+CipherSetup(cmEncrypt,fModeOfOperation,@Key,nil,LengthToBytes(KeyLength),LengthToBytes(BlockLength));
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TRijndaelCipher.SetupDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength);
+begin
+CipherSetup(cmDecrypt,ModeOfOperation,@Key,@InitVector,LengthToBytes(KeyLength),LengthToBytes(BlockLength));
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TRijndaelCipher.SetupDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength);
+begin
+CipherSetup(cmDecrypt,ModeOfOperation,@Key,nil,LengthToBytes(KeyLength),LengthToBytes(BlockLength));
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TRijndaelCipher.SetupDecryption(const Key; KeyLength, BlockLength: TRijLength);
+begin
+CipherSetup(cmDecrypt,fModeOfOperation,@Key,nil,LengthToBytes(KeyLength),LengthToBytes(BlockLength));
+end;
+
+(*
 {==============================================================================}
 {------------------------------------------------------------------------------}
 {                                  TAESCipher                                  }
@@ -2620,5 +2058,5 @@ end;
 end;
 
 {$ENDIF PurePascal}
-
+*)
 end.

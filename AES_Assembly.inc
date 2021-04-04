@@ -9,7 +9,7 @@
 
   Rijndael/AES cipher
 
-  Â©FrantiÅ¡ek Milt 2018-05-03
+  ©František Milt 2018-10-21
 
   Version 1.1.2
 
