@@ -9,18 +9,47 @@
 
   Rijndael/AES cipher
 
-  ©František Milt 2018-10-21
+    This unit provides implementation of Rijndael and AES (which is a subset
+    of Rijndael) ciphers.
 
-  Version 1.1.3
+    All valid key and block lengths are implemented and supported (note that
+    AES supports only limited set of key lengths and block length is limited to
+    128 bits).
 
-  All combinations of allowed key and block sizes are implemented and should be
-  compatible with reference Rijndael cipher.
+    Implemenatation of AES cipher also supports hardware acceleration using
+    AESNI instruction extension on systems that do support it.
+
+    WARNING - because Rijndael is more parametrized, it is, at least in current
+              implementation, much slower than AES. Therefore it is not
+              recommended to use full Rijndael when only AES subset is required.
+
+  Version 2.0 (2021-04-05)
+
+  Last change 2021-04-05
+
+  ©2016-2021 František Milt
+
+  Contacts:
+    František Milt: frantisek.milt@gmail.com
+
+  Support:
+    If you find this code useful, please consider supporting its author(s) by
+    making a small donation using the following link(s):
+
+      https://www.paypal.me/FMilt
+
+  Changelog:
+    For detailed changelog and history please refer to this git repository:
+
+      github.com/TheLazyTomcat/Lib.AES
 
   Dependencies:
-    AuxTypes    - github.com/ncs-sniper/Lib.AuxTypes
-    AuxClasses  - github.com/ncs-sniper/Lib.AuxClasses
-    StrRect     - github.com/ncs-sniper/Lib.StrRect
-  * SimpleCPUID - github.com/ncs-sniper/Lib.SimpleCPUID
+    AuxTypes           - github.com/TheLazyTomcat/Lib.AuxTypes
+    AuxClasses         - github.com/TheLazyTomcat/Lib.AuxClasses
+    StrRect            - github.com/TheLazyTomcat/Lib.StrRect
+    StaticMemoryStream - github.com/TheLazyTomcat/Lib.StaticMemoryStream
+    CipherBase         - github.com/TheLazyTomcat/Lib.CipherBase
+  * SimpleCPUID        - github.com/TheLazyTomcat/Lib.SimpleCPUID
 
   SimpleCPUID is required only when PurePascal symbol is not defined.
 

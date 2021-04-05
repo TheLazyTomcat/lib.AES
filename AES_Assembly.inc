@@ -9,12 +9,38 @@
 
   Rijndael/AES cipher
 
-  ©František Milt 2018-10-21
+    This file contains code fragments used in assembly implementation of
+    hardware-accelerated AES (utilizing AESNI instructions).
 
-  Version 1.1.2
+  Version 2.0 (2021-04-05)
 
-  This file contains code fragments used in assembly implementation of
-  hardware-accelerated AES cipher.
+  Last change 2021-04-05
+
+  ©2016-2021 František Milt
+
+  Contacts:
+    František Milt: frantisek.milt@gmail.com
+
+  Support:
+    If you find this code useful, please consider supporting its author(s) by
+    making a small donation using the following link(s):
+
+      https://www.paypal.me/FMilt
+
+  Changelog:
+    For detailed changelog and history please refer to this git repository:
+
+      github.com/TheLazyTomcat/Lib.AES
+
+  Dependencies:
+    AuxTypes           - github.com/TheLazyTomcat/Lib.AuxTypes
+    AuxClasses         - github.com/TheLazyTomcat/Lib.AuxClasses
+    StrRect            - github.com/TheLazyTomcat/Lib.StrRect
+    StaticMemoryStream - github.com/TheLazyTomcat/Lib.StaticMemoryStream
+    CipherBase         - github.com/TheLazyTomcat/Lib.CipherBase
+  * SimpleCPUID        - github.com/TheLazyTomcat/Lib.SimpleCPUID
+
+  SimpleCPUID is required only when PurePascal symbol is not defined.
 
 ===============================================================================}
 
