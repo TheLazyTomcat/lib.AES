@@ -27,14 +27,6 @@
 ===============================================================================}
 unit AES;
 
-{$IF defined(CPU64) or defined(CPU64BITS)}
-  {$DEFINE CPU64bit}
-{$ELSEIF defined(CPU16)}
-  {$MESSAGE FATAL '16bit CPU not supported'}
-{$ELSE}
-  {$DEFINE CPU32bit}
-{$IFEND}
-
 {$IF defined(CPUX86_64) or defined(CPUX64)}
   {$DEFINE x64}
 {$ELSEIF defined(CPU386)}
@@ -43,27 +35,20 @@ unit AES;
   {$DEFINE PurePascal}
 {$IFEND}
 
-{$IF Defined(WINDOWS) or Defined(MSWINDOWS)}
-  {$DEFINE Windows}
-{$IFEND}
-
 {$IFDEF ENDIAN_BIG}
   {$MESSAGE FATAL 'Big-endian system not supported'}
 {$ENDIF}
 
-{$IFOPT Q+}
-  {$DEFINE OverflowChecks}
-{$ENDIF}
-
 {$IFDEF FPC}
-  {$MODE Delphi}
+  {$MODE ObjFPC}
+  {$MODESWITCH DuplicateLocals+}
   {$IFNDEF PurePascal}
     {$ASMMODE Intel}
-    {$DEFINE ASMSuppressSizeWarnings}
   {$ENDIF}
   {$DEFINE FPC_DisableWarns}
   {$MACRO ON}
 {$ENDIF}
+{$H+}
 
 {$IF not Defined(FPC) and not Defined(x64)}
   {$DEFINE ASM_MachineCode}
@@ -131,25 +116,28 @@ type
     class Function CipherName: String; override;
     class Function LengthToBytes(Value: TRijLength): TMemSize; virtual;
     class Function BytesToLength(Value: TMemSize): TRijLength; virtual;
+    // macro contructors
     constructor CreateForEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength); overload; virtual;
     constructor CreateForEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
     constructor CreateForEncryption(const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
     constructor CreateForDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
     constructor CreateForDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
     constructor CreateForDecryption(const Key; KeyLength, BlockLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
+    // cipher setup
     procedure SetupEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength); overload; virtual;
     procedure SetupEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
     procedure SetupEncryption(const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
     procedure SetupDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength, BlockLength: TRijLength); overload; virtual;
     procedure SetupDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
     procedure SetupDecryption(const Key; KeyLength, BlockLength: TRijLength); overload; virtual;
+    // properties
     property BlockLength: TRijLength read GetBlockLength write SetBlockLength;
     property KeyLength: TRijLength read GetKeyLength write SetKeyLength;
     property Nb: Integer read fNb;  // length of block in words (also number of columns in state)
     property Nk: Integer read fNk;  // length of key in words
     property Nr: Integer read fNr;  // number of rounds (function of Nk and Nb)
   end;
-(*
+
 {===============================================================================
 --------------------------------------------------------------------------------
                                    TAESCipher
@@ -161,58 +149,61 @@ type
 type
   TAESCipher = class(TRijndaelCipher)
   protected
-    procedure SetKeyLength(Value: TRijLength); override;
+    fAccelerated:     Boolean;  // used only internally
+    fKeySchedulePtr:  Pointer;  // only for assembly code
+    // getters, setters
+    procedure SetBlockBytes(Value: TMemSize); override;
+    procedure SetKeyBytes(Value: TMemSize); override;
     procedure SetBlockLength(Value: TRijLength); override;
-    procedure CipherEncrypt(const Input; out Output); override;
-    procedure CipherDecrypt(const Input; out Output); override;
-  public
+    procedure SetKeyLength(Value: TRijLength); override;
+    // implementation management
     class Function AccelerationSupported: Boolean; virtual;
-    constructor Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; override;
-    constructor Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; override;
-    constructor Create(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
-    constructor Create(const Key; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
-    procedure Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; override;
-    procedure Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode); overload; override;
-    procedure Init(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
-    procedure Init(const Key; KeyLength: TRijLength; Mode: TBCMode); overload; virtual;
-  end;
-
-{===============================================================================
---------------------------------------------------------------------------------
-                             TAESCipherAccelerated                             
---------------------------------------------------------------------------------
-===============================================================================}
-{===============================================================================
-    TAESCipherAccelerated - class declaration
-===============================================================================}
-
-{$IFDEF PurePascal}
-  TAESCipherAccelerated = TAESCipher;
-{$ELSE}
-  TAESCipherAccelerated = class(TAESCipher)
-  private
-    fAccelerated:     Boolean;
-    fKeySchedulePtr:  Pointer;
-  protected
+    Function GetCipherImplementation: TCipherImplementation; override;
+    procedure SetCipherImplementation(Value: TCipherImplementation); override;
+    // cipher management
     procedure CipherInit; override;
-    procedure CipherEncrypt(const Input; out Output); override;
-    procedure CipherDecrypt(const Input; out Output); override;
+    // processing
+    procedure BlockEncrypt(const Input; out Output); override;
+    procedure BlockDecrypt(const Input; out Output); override;
+    // initialization/finalization
+    procedure Initialize; override;
   public
-    class Function AccelerationSupported: Boolean; override;
+    class Function CipherImplementationsAvailable: TCipherImplementations; override;
+    class Function CipherImplementationsSupported: TCipherImplementations; override;
+    class Function CipherName: String; override;
+    // macro contructors
+    constructor CreateForEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength: TRijLength); overload; virtual;
+    constructor CreateForEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength: TRijLength); overload; virtual;
+    constructor CreateForEncryption(const Key; KeyLength: TRijLength); overload; virtual;
+    constructor CreateForDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
+    constructor CreateForDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
+    constructor CreateForDecryption(const Key; KeyLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF}); overload; virtual;
+    // cipher setup
+    procedure SetupEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength: TRijLength); overload; virtual;
+    procedure SetupEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength: TRijLength); overload; virtual;
+    procedure SetupEncryption(const Key; KeyLength: TRijLength); overload; virtual;
+    procedure SetupDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength: TRijLength); overload; virtual;
+    procedure SetupDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength: TRijLength); overload; virtual;
+    procedure SetupDecryption(const Key; KeyLength: TRijLength); overload; virtual;
   end;
-{$ENDIF}
-*)
+
 implementation
 
 uses
-  SysUtils, Math, StrRect{$IFNDEF PurePascal}, SimpleCPUID{$ENDIF};
+  Math{$IFNDEF PurePascal}, SimpleCPUID{$ENDIF};
 
 {$IFDEF FPC_DisableWarns}
   {$DEFINE FPCDWM}
   {$DEFINE W4055:={$WARN 4055 OFF}} // Conversion between ordinals and pointers is not portable
-  {$DEFINE W5024:={$WARN 5024 OFF}} // Parameter "$1" not used
   {$DEFINE W5036:={$WARN 5036 OFF}} // Local variable "$1" does not seem to be initialized
   {$DEFINE W5058:={$WARN 5058 OFF}} // Variable "$1" does not seem to be initialized
+  {$PUSH}{$WARN 2005 OFF}           // Comment level $1 found
+  {$IF Defined(FPC) and (FPC_FULLVERSION >= 30000)}
+    {$DEFINE W7122:={$WARN 7122 OFF}} // Check size of memory operand "$1: memory-operand-size is $2 bits, but expected [$3 bits + $4 byte offset]"
+  {$ELSE}
+    {$DEFINE W7122:=}
+  {$IFEND}
+  {$POP}
 {$ENDIF}
 
 {===============================================================================
@@ -396,8 +387,8 @@ uses
 
 --- Constructing decryption tables ---------------------------------------------
 
-  See methods Encrypt and Decrypt for detailed description of why and how the
-  following tables are created.
+  See methods BlockEncrypt and BlockDecrypt for detailed description of why
+  and how the following tables are created.
 }
 const
 {-- Encryption lookup tables --------------------------------------------------}
@@ -676,6 +667,8 @@ const
     $CA81F3AF, $B93EC468, $382C3424, $C25F40A3, $1672C31D, $BC0C25E2, $288B493C, $FF41950D,
     $397101A8, $08DEB30C, $D89CE4B4, $6490C156, $7B6184CB, $D570B632, $48745C6C, $D04257B8);
 
+{-- Other lookup tables and constants -----------------------------------------}
+
   // Round constants
   RCon: array[1..29] of Byte = (
     $01, $02, $04, $08, $10, $20, $40, $80, $1B, $36, $6c, $d8, $ab, $4d, $9a, $2f,
@@ -712,7 +705,7 @@ const
 
 procedure TRijndaelCipher.SetBlockBytes(Value: TMemSize);
 begin
-If Value in [16,20,24,28,32] then
+If (Value <= 255) and (UInt8(Value) in [16,20,24,28,32]) then
   begin
     inherited SetBlockBytes(Value);
     fNb := Value div SizeOf(TRijWord);
@@ -725,7 +718,7 @@ end;
 
 procedure TRijndaelCipher.SetKeyBytes(Value: TMemSize);
 begin
-If Value in [16,20,24,28,32] then
+If (Value <= 255) and (UInt8(Value) in [16,20,24,28,32]) then
   begin
     inherited SetKeyBytes(Value);
     fNk := Value div SizeOf(TRijWord);
@@ -820,7 +813,9 @@ fRowShiftOff := RowShiftOffsets[fNb];
   further computations.
 *)
 For i := 0 to Pred(fNk) do
+{$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
   fKeySchedule[i] := PRijWord(PtrUInt(fKey) + PtrUInt(4 * i))^;
+{$IFDEF FPCDWM}{$POP}{$ENDIF}
 (*
   RotWord rotates bytes in input 32bit word one place up as this:
 
@@ -830,7 +825,7 @@ For i := 0 to Pred(fNk) do
   appropriate byte from input word as an index for substitution table.
 
   SubWord is done by indexing encryption table 4. Lowest byte of all words in
-  encoding table 4 (EncTab4) contains plain substitution values (see method
+  encryption table 4 (EncTab4) contains plain substitution values (see method
   Encrypt for description how the words in this table are constructed), so we
   use it as a substitution lookup table instead of declaring one separately.
 
@@ -868,16 +863,16 @@ For i := fNk to Pred(fNb * (fNr + 1)) do
     mKSw2 = glt13[KSw0] xor glt9[KSw1] xor glt14[KSw2] xor glt11[KSw3]
     mKSw3 = glt11[KSw0] xor glt13[KSw1] xor glt9[KSw2] xor glt14[KSw3]
 
-  ...and since decoding tables are constructed this way:
+  ...and since decryption tables are constructed this way:
 
     Table 1:  W1[i] = {glt14(invsub(i)),glt9(invsub(i)),glt13(invsub(i)),glt11(invsub(i))}
     Table 2:  W2[i] = {glt11(invsub(i)),glt14(invsub(i)),glt9(invsub(i)),glt13(invsub(i))}
     Table 3:  W3[i] = {glt13(invsub(i)),glt11(invsub(i)),glt14(invsub(i)),glt9(invsub(i))}
     Table 4:  W4[i] = {glt9(invsub(i)),glt13(invsub(i)),glt11(invsub(i)),glt14(invsub(i))}
 
-  ...we can use them in here for lookup. Only problem is, that every decoding
+  ...we can use them in here for lookup. Only problem is, that every decryption
   table already incorporates inverse substitution, so every byte used to index
-  word in decoding table must be first rectified to a state in which applying
+  word in decryption table must be first rectified to a state in which applying
   invsub() on it returns its original value, which will result in this:
 
     W1[rectified(i)] = {glt14[i],glt9[i],glt13[i],glt11[i]}
@@ -886,7 +881,7 @@ For i := fNk to Pred(fNb * (fNr + 1)) do
 
     invsub(sub(B)) = B
 
-  What we need is therefore simple substitution. Encoding table 4 can be used
+  What we need is therefore simple substitution. Encryption table 4 can be used
   for substitution since lowest byte of each its word contains plain
   substitution value for a given index (byte).
   Finally, modified shedule word is constructed this way:
@@ -1472,194 +1467,18 @@ begin
 CipherSetup(cmDecrypt,fModeOfOperation,@Key,nil,LengthToBytes(KeyLength),LengthToBytes(BlockLength));
 end;
 
-(*
-{==============================================================================}
-{------------------------------------------------------------------------------}
-{                                  TAESCipher                                  }
-{------------------------------------------------------------------------------}
-{==============================================================================}
 
-{==============================================================================}
-{   TAESCipher - implementation                                                }
-{==============================================================================}
-
-{------------------------------------------------------------------------------}
-{   TAESCipher - protected methods                                             }
-{------------------------------------------------------------------------------}
-
-procedure TAESCipher.SetKeyLength(Value: TRijLength);
-begin
-If Value in [r128bit,r192bit,r256bit] then
-  inherited SetKeyLength(Value)
-else
-  raise Exception.CreateFmt('TAESCipher.SetKeyLength: Unsupported key length (%d).',[Ord(Value)]);
-end;
-
-//------------------------------------------------------------------------------
-
-procedure TAESCipher.SetBlockLength(Value: TRijLength);
-begin
-If Value = r128bit then
-  inherited SetBlockLength(Value)
-else
-  raise Exception.CreateFmt('TAESCipher.SetBlockLength: Unsupported block length (%d).',[Ord(Value)]);
-end;
-
-//------------------------------------------------------------------------------
-
-{$IFDEF FPCDWM}{$PUSH}W5036 W5058{$ENDIF}
-procedure TAESCipher.CipherEncrypt(const Input; out Output);
-var
-  i,j:        Integer;
-  State:      TRijState;
-  TempState:  TRijState;
-begin
-For i := 0 to Pred(fNb) do
-  State[i] := TRijState(Input)[i] xor fKeySchedule[i];
-For j := 1 to (fNr - 1) do
-  begin
-    TempState := State;
-    For i := 0 to Pred(fNb) do
-      State[i] := EncTab1[Byte(TempState[i and 3])] xor
-                  EncTab2[Byte(TempState[(i + 1) and 3] shr 8)] xor
-                  EncTab3[Byte(TempState[(i + 2) and 3] shr 16)] xor
-                  EncTab4[Byte(TempState[(i + 3) and 3] shr 24)] xor
-                  fKeySchedule[j * fNb + i];
-  end;
-For i := 0 to Pred(fNb) do
-  TempState[i] := (EncTab4[Byte(State[i and 3])] and $FF) or
-                 ((EncTab4[Byte(State[(i + 1) and 3] shr 8)] and $FF) shl 8) or
-                 ((EncTab4[Byte(State[(i + 2) and 3] shr 16)] and $FF) shl 16) or
-                 ((EncTab4[Byte(State[(i + 3) and 3] shr 24)] and $FF) shl 24) xor
-                  fKeySchedule[fNr * fNb + i];
-Move(TempState,Output,BlockBytes);
-end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
-
-//------------------------------------------------------------------------------
-
-{$IFDEF FPCDWM}{$PUSH}W5036 W5058{$ENDIF}
-procedure TAESCipher.CipherDecrypt(const Input; out Output);
-var
-  i,j:        Integer;
-  State:      TRijState;
-  TempState:  TRijState;
-begin
-For i := 0 to Pred(fNb) do
-  State[i] := TRijState(Input)[i] xor fKeySchedule[fNr * fNb + i];
-For j := (fNr - 1) downto 1 do
-  begin
-    TempState := State;
-    For i := 0 to Pred(fNb) do
-      State[i] := DecTab1[Byte(TempState[i and 3])] xor
-                  DecTab2[Byte(TempState[(i - 1) and 3] shr 8)] xor
-                  DecTab3[Byte(TempState[(i - 2) and 3] shr 16)] xor
-                  DecTab4[Byte(TempState[(i - 3) and 3] shr 24)] xor
-                  fKeySchedule[j * fNb + i];
-  end;
-For i := 0 to Pred(fNb) do
-  TempState[i] := TRijWord(InvSub[Byte(State[i and 3])]) or
-                 (TRijWord(InvSub[Byte(State[(i - 1) and 3] shr 8)]) shl 8) or
-                 (TRijWord(InvSub[Byte(State[(i - 2) and 3] shr 16)]) shl 16) or
-                 (TRijWord(InvSub[Byte(State[(i - 3) and 3] shr 24)]) shl 24) xor
-                  fKeySchedule[i];
-Move(TempState,Output,BlockBytes);
-end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
-
-{------------------------------------------------------------------------------}
-{   TAESCipher - public methods                                                }
-{------------------------------------------------------------------------------}
-
-class Function TAESCipher.AccelerationSupported: Boolean;
-begin
-Result := False;
-end;
-
-//------------------------------------------------------------------------------
-
-{$IFDEF FPCDWM}{$PUSH}W5024{$ENDIF}
-constructor TAESCipher.Create(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
-begin
-inherited Create(Key,InitVector,KeyLength,r128bit,Mode);
-end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-{$IFDEF FPCDWM}{$PUSH}W5024{$ENDIF}
-constructor TAESCipher.Create(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
-begin
-inherited Create(Key,KeyLength,r128bit,Mode);
-end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-constructor TAESCipher.Create(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode);
-begin
-inherited Create(Key,InitVector,KeyLength,r128bit,Mode);
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-constructor TAESCipher.Create(const Key; KeyLength: TRijLength; Mode: TBCMode);
-begin
-inherited Create(Key,KeyLength,r128bit,Mode);
-end;
-
-//------------------------------------------------------------------------------
-
-{$IFDEF FPCDWM}{$PUSH}W5024{$ENDIF}
-procedure TAESCipher.Init(const Key; const InitVector; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
-begin
-inherited Init(Key,InitVector,KeyLength,r128bit,Mode);
-end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-{$IFDEF FPCDWM}{$PUSH}W5024{$ENDIF}
-procedure TAESCipher.Init(const Key; KeyLength, BlockLength: TRijLength; Mode: TBCMode);
-begin
-inherited Init(Key,KeyLength,r128bit,Mode);
-end;
-{$IFDEF FPCDWM}{$POP}{$ENDIF}
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-procedure TAESCipher.Init(const Key; const InitVector; KeyLength: TRijLength; Mode: TBCMode);
-begin
-inherited Init(Key,InitVector,KeyLength,r128bit,Mode);
-end;
-
-//   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---   ---
-
-procedure TAESCipher.Init(const Key; KeyLength: TRijLength; Mode: TBCMode);
-begin
-inherited Init(Key,KeyLength,r128bit,Mode);
-end;
-
-{==============================================================================}
-{------------------------------------------------------------------------------}
-{                            TAESCipherAccelerated                             }
-{------------------------------------------------------------------------------}
-{==============================================================================}
-
-{==============================================================================}
-{   TAESCipherAccelerated - implementation                                     }
-{==============================================================================}
-
-{------------------------------------------------------------------------------}
-{   TAESCipherAccelerated - assembly implementation                            }
-{------------------------------------------------------------------------------}
+{===============================================================================
+--------------------------------------------------------------------------------
+                                   TAESCipher
+--------------------------------------------------------------------------------
+===============================================================================}
+{===============================================================================
+    TAESCipher - detached assembly code
+===============================================================================}
 
 {$IFNDEF PurePascal}
-
-{$IFDEF ASMSuppressSizeWarnings}
-  {$WARN 2087 OFF}  //  Supresses warnings on following $WARN
-  {$WARN 7122 OFF}  //  Warning: Check size of memory operand "op: memory-operand-size is X bits, but expected [Y bits + Z byte offset]"
-{$ENDIF}
+{$IFDEF FPCDWM}{$PUSH}W7122{$ENDIF}
 
 procedure AESNI_KeyExpand_128(Key, KeySchedule: Pointer); register; assembler;
 asm
@@ -1832,7 +1651,7 @@ asm
 {$ENDIF}
 end;
 
-//==============================================================================
+//------------------------------------------------------------------------------
 
 procedure AESNI_KeyExpand_Dec(KeySchedule: Pointer; Repeats: UInt32); register; assembler;
 asm
@@ -1849,13 +1668,13 @@ asm
     JNZ     @Cycle
 end;
 
-//==============================================================================
+//------------------------------------------------------------------------------
 
 procedure AESNI_Encrypt(Input, Output, KeySchedule: Pointer; Rounds: UInt8); register; assembler;
 asm
     // load input
     MOVUPS      XMM0, dqword ptr [Input]
-    PXOR        XMM0, dqword ptr [KeySchedule]
+    PXOR        XMM0, dqword ptr [KeySchedule]   
     ADD         KeySchedule,  16
 
     // first 9 rounds
@@ -1985,29 +1804,117 @@ asm
     MOVUPS      dqword ptr [Output],  XMM0
 end;
 
-{$IFDEF ASMSuppressSizeWarnings}
-  {$WARN 7122 ON}
-  {$WARN 2087 ON}
-{$ENDIF}
+{$IFDEF FPCDWM}{$POP}{$ENDIF}
+{$ENDIF PurePascal}
 
-{------------------------------------------------------------------------------}
-{   TAESCipherAccelerated - protected methods                                  }
-{------------------------------------------------------------------------------}
+{===============================================================================
+    TAESCipher - class implementation
+===============================================================================}
+{-------------------------------------------------------------------------------
+    TAESCipher - protected methods
+-------------------------------------------------------------------------------}
 
-procedure TAESCipherAccelerated.CipherInit;
+class Function TAESCipher.AccelerationSupported: Boolean;
 begin
-fAccelerated := AccelerationSupported;
+{$IFDEF PurePascal}
+Result := False;
+{$ELSE}
+with TSimpleCPUID.Create do
+try
+  Result := Info.SupportedExtensions.AES;
+finally
+  Free;
+end;
+{$ENDIF}
+end;
+
+//------------------------------------------------------------------------------
+
+Function TAESCipher.GetCipherImplementation: TCipherImplementation;
+begin
+// do not call inherited
+If fAccelerated then
+  Result := ciAccelerated
+else
+  Result := ciPascal;
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.SetCipherImplementation(Value: TCipherImplementation);
+begin
+If not IsRunning then
+  begin
+    // do not call inherited
+    case Value of
+      ciAssembly,
+      ciAccelerated:  fAccelerated := AccelerationSupported;
+    else
+     {himPascal}
+      fAccelerated := False;
+    end;
+  end
+else raise ECipherInvalidState.Create('TAESCipher.SetCipherImplementation: Cannot change implementation on running cipher.');
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.SetBlockBytes(Value: TMemSize);
+begin
+If Value = 16 then
+  inherited SetBlockBytes(Value)
+else
+  raise EAESInvalidValue.CreateFmt('TAESCipher.SetBlockBytes: Unsupported block size (%d).',[Value]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.SetKeyBytes(Value: TMemSize); 
+begin
+If (Value <= 255) and (UInt8(Value) in [16,24,32]) then
+  inherited SetKeyBytes(Value)
+else
+  raise EAESInvalidValue.CreateFmt('TAESCipher.SetKeyBytes: Unsupported key size (%d).',[Value]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.SetBlockLength(Value: TRijLength);
+begin
+If Value = r128bit then
+  inherited SetBlockLength(Value)
+else
+  raise EAESInvalidValue.CreateFmt('TAESCipher.SetBlockLength: Unsupported block length (%d).',[Ord(Value)]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.SetKeyLength(Value: TRijLength);
+begin
+If Value in [r128bit,r192bit,r256bit] then
+  inherited SetKeyLength(Value)
+else
+  raise EAESInvalidValue.CreateFmt('TAESCipher.SetKeyLength: Unsupported key length (%d).',[Ord(Value)]);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.CipherInit;
+begin
+{$IFDEF PurePascal}
+inherited CipherInit;
+{$ELSE}
 {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
 fKeySchedulePtr := Pointer((PtrUInt(Addr(fKeySchedule)) + $F) and not PtrUInt($F));
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
 If fAccelerated then
   begin
-    case fKeyLength of
-      r128bit:  AESNI_KeyExpand_128(fKey,fKeySchedulePtr);
-      r192bit:  AESNI_KeyExpand_192(fKey,fKeySchedulePtr);
-      r256bit:  AESNI_KeyExpand_256(fKey,fKeySchedulePtr);
+    case fKeyBytes of
+      16: AESNI_KeyExpand_128(fKey,fKeySchedulePtr);
+      24: AESNI_KeyExpand_192(fKey,fKeySchedulePtr);
+      32: AESNI_KeyExpand_256(fKey,fKeySchedulePtr);
     else
-      raise Exception.CreateFmt('TAESCipherAccelerated.CipherInit: Unsupported key length (%d).',[Ord(fKeyLength)]);
+      raise EAESInvalidValue.CreateFmt('TAESCipher.CipherInit: Unsupported key size (%d).',[Ord(fKeyBytes)]);
     end;
     If (Mode = cmDecrypt) and not (ModeOfOperation in [moCFB,moOFB,moCTR]) then
       AESNI_KeyExpand_Dec(fKeySchedulePtr,UInt32(fNr - 1));
@@ -2021,42 +1928,208 @@ If (Mode = cmDecrypt) and not (ModeOfOperation in [moCFB,moOFB,moCTR]) then
 {$IFDEF FPCDWM}{$PUSH}W4055{$ENDIF}
   fKeySchedulePtr := Pointer(PtrUInt(fKeySchedulePtr) + PtrUInt(fNr * fNb * SizeOf(TRijWord)));
 {$IFDEF FPCDWM}{$POP}{$ENDIF}
+{$ENDIF}
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TAESCipherAccelerated.CipherEncrypt(const Input; out Output);
+{$IFDEF FPCDWM}{$PUSH}W5036 W5058{$ENDIF}
+procedure TAESCipher.BlockEncrypt(const Input; out Output);
+var
+  i,j:        Integer;
+  State:      TRijState;
+  TempState:  TRijState;
 begin
+{$IFNDEF PurePascal}
 If fAccelerated then
   AESNI_Encrypt(@Input,@Output,fKeySchedulePtr,UInt8(fNr))
 else
-  inherited CipherEncrypt(Input,Output);
+{$ENDIF}
+  begin
+    For i := 0 to Pred(fNb) do
+      State[i] := TRijState(Input)[i] xor fKeySchedule[i];
+    For j := 1 to (fNr - 1) do
+      begin
+        TempState := State;
+        For i := 0 to Pred(fNb) do
+          State[i] := EncTab1[Byte(TempState[i and 3])] xor
+                      EncTab2[Byte(TempState[(i + 1) and 3] shr 8)] xor
+                      EncTab3[Byte(TempState[(i + 2) and 3] shr 16)] xor
+                      EncTab4[Byte(TempState[(i + 3) and 3] shr 24)] xor
+                      fKeySchedule[j * fNb + i];
+      end;
+    For i := 0 to Pred(fNb) do
+      TempState[i] := (EncTab4[Byte(State[i and 3])] and $FF) or
+                     ((EncTab4[Byte(State[(i + 1) and 3] shr 8)] and $FF) shl 8) or
+                     ((EncTab4[Byte(State[(i + 2) and 3] shr 16)] and $FF) shl 16) or
+                     ((EncTab4[Byte(State[(i + 3) and 3] shr 24)] and $FF) shl 24) xor
+                      fKeySchedule[fNr * fNb + i];
+    Move(TempState,Output,BlockBytes);
+  end;
+end;
+{$IFDEF FPCDWM}{$POP}{$ENDIF}
+
+//------------------------------------------------------------------------------
+
+{$IFDEF FPCDWM}{$PUSH}W5036 W5058{$ENDIF}
+procedure TAESCipher.BlockDecrypt(const Input; out Output);
+var
+  i,j:        Integer;
+  State:      TRijState;
+  TempState:  TRijState;
+begin
+{$IFNDEF PurePascal}
+If fAccelerated then
+  AESNI_Decrypt(@Input,@Output,fKeySchedulePtr,UInt8(fNr))
+else
+{$ENDIF}
+  begin
+    For i := 0 to Pred(fNb) do
+      State[i] := TRijState(Input)[i] xor fKeySchedule[fNr * fNb + i];
+    For j := (fNr - 1) downto 1 do
+      begin
+        TempState := State;
+        For i := 0 to Pred(fNb) do
+          State[i] := DecTab1[Byte(TempState[i and 3])] xor
+                      DecTab2[Byte(TempState[(i - 1) and 3] shr 8)] xor
+                      DecTab3[Byte(TempState[(i - 2) and 3] shr 16)] xor
+                      DecTab4[Byte(TempState[(i - 3) and 3] shr 24)] xor
+                      fKeySchedule[j * fNb + i];
+      end;
+    For i := 0 to Pred(fNb) do
+      TempState[i] := TRijWord(InvSub[Byte(State[i and 3])]) or
+                     (TRijWord(InvSub[Byte(State[(i - 1) and 3] shr 8)]) shl 8) or
+                     (TRijWord(InvSub[Byte(State[(i - 2) and 3] shr 16)]) shl 16) or
+                     (TRijWord(InvSub[Byte(State[(i - 3) and 3] shr 24)]) shl 24) xor
+                      fKeySchedule[i];
+    Move(TempState,Output,BlockBytes);
+  end;
+end;
+{$IFDEF FPCDWM}{$POP}{$ENDIF}
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.Initialize;
+begin
+inherited;
+fAccelerated := AccelerationSupported;
+fKeySchedulePtr := @fKeySchedule;
+end;
+
+{-------------------------------------------------------------------------------
+    TAESCipher - public methods
+-------------------------------------------------------------------------------}
+
+class Function TAESCipher.CipherImplementationsAvailable: TCipherImplementations;
+begin
+Result := [ciPascal{$IFNDEF PurePascal},ciAssembly,ciAccelerated{$ENDIF}];
 end;
 
 //------------------------------------------------------------------------------
 
-procedure TAESCipherAccelerated.CipherDecrypt(const Input; out Output);
+class Function TAESCipher.CipherImplementationsSupported: TCipherImplementations;
 begin
-If fAccelerated then
-  AESNI_Decrypt(@Input,@Output,fKeySchedulePtr,UInt8(fNr))
+If AccelerationSupported then
+  Result := [ciPascal,ciAssembly,ciAccelerated]
 else
-  inherited CipherDecrypt(Input,Output);
+  Result := [ciPascal];
 end;
 
-{------------------------------------------------------------------------------}
-{   TAESCipherAccelerated - public methods                                     }
-{------------------------------------------------------------------------------}
+//------------------------------------------------------------------------------
 
-class Function TAESCipherAccelerated.AccelerationSupported: Boolean;
+class Function TAESCipher.CipherName: String;
 begin
-with TSimpleCPUID.Create do
-try
-  Result := Info.SupportedExtensions.AES;
-finally
-  Free;
-end;
+Result := 'AES';
 end;
 
-{$ENDIF PurePascal}
-*)
+//------------------------------------------------------------------------------
+
+constructor TAESCipher.CreateForEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength: TRijLength);
+begin
+Create;
+SetupEncryption(ModeOfOperation,Key,InitVector,KeyLength);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TAESCipher.CreateForEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength: TRijLength);
+begin
+Create;
+SetupEncryption(ModeOfOperation,Key,KeyLength);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TAESCipher.CreateForEncryption(const Key; KeyLength: TRijLength);
+begin
+Create;
+SetupEncryption(Key,KeyLength);
+end;
+
+//------------------------------------------------------------------------------
+
+constructor TAESCipher.CreateForDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+begin
+Create;
+SetupDecryption(ModeOfOperation,Key,InitVector,KeyLength);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TAESCipher.CreateForDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+begin
+Create;
+SetupDecryption(ModeOfOperation,Key,KeyLength);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+constructor TAESCipher.CreateForDecryption(const Key; KeyLength: TRijLength{$IFNDEF FPC}; Dummy: Integer = 0{$ENDIF});
+begin
+Create;
+SetupDecryption(Key,KeyLength);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.SetupEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength: TRijLength);
+begin
+CipherSetup(cmEncrypt,ModeOfOperation,@Key,@InitVector,LengthToBytes(KeyLength),16);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TAESCipher.SetupEncryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength: TRijLength);
+begin
+CipherSetup(cmEncrypt,ModeOfOperation,@Key,nil,LengthToBytes(KeyLength),16);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TAESCipher.SetupEncryption(const Key; KeyLength: TRijLength);
+begin
+CipherSetup(cmEncrypt,fModeOfOperation,@Key,nil,LengthToBytes(KeyLength),16);
+end;
+
+//------------------------------------------------------------------------------
+
+procedure TAESCipher.SetupDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; const InitVector; KeyLength: TRijLength);
+begin
+CipherSetup(cmDecrypt,ModeOfOperation,@Key,@InitVector,LengthToBytes(KeyLength),16);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TAESCipher.SetupDecryption(ModeOfOperation: TBlockCipherModeOfOperation; const Key; KeyLength: TRijLength);
+begin
+CipherSetup(cmDecrypt,ModeOfOperation,@Key,nil,LengthToBytes(KeyLength),16);
+end;
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+procedure TAESCipher.SetupDecryption(const Key; KeyLength: TRijLength);
+begin
+CipherSetup(cmDecrypt,fModeOfOperation,@Key,nil,LengthToBytes(KeyLength),16);
+end;
+
 end.
