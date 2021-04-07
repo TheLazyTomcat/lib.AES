@@ -25,7 +25,7 @@
 
   Version 2.0 (2021-04-05)
 
-  Last change 2021-04-05
+  Last change 2021-04-07
 
   ©2016-2021 František Milt
 
@@ -55,6 +55,17 @@
 
 ===============================================================================}
 unit AES;
+{
+  AES_PurePascal
+
+  If you want to compile this unit without ASM, don't want to or cannot define
+  PurePascal for the entire project and at the same time you don't want to or
+  cannot make changes to this unit, define this symbol for the entire project
+  and this unit will be compiled in PurePascal mode.
+}
+{$IFDEF AES_PurePascal}
+  {$DEFINE PurePascal}
+{$ENDIF}
 
 {$IF defined(CPUX86_64) or defined(CPUX64)}
   {$DEFINE x64}
